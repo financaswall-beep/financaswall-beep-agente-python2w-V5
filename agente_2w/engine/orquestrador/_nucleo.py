@@ -414,6 +414,36 @@ def _despachar_acoes(sessao_id: UUID, acoes: list[str]):
     return pedido_criado
 
 
+# Fatos de busca que devem ser limpos quando a conversa reinicia do zero.
+# Evita que dados de uma moto/pneu antigos contaminem a nova conversa.
+_FATOS_BUSCA_CONTEXTO = [
+    ChaveContexto.ULTIMOS_PNEUS_ENCONTRADOS,
+    ChaveContexto.MEDIDA_INFORMADA,
+    ChaveContexto.POSICAO_PNEU,
+    ChaveContexto.MOTO_MODELO,
+    ChaveContexto.MOTO_MARCA,
+    ChaveContexto.MOTO_ANO,
+    ChaveContexto.SEM_PREFERENCIA_MARCA,
+    ChaveContexto.CLIENTE_RECUSOU_OPCAO_ATUAL,
+    ChaveContexto.ITENS_FINALIZADOS,
+]
+
+
+def _limpar_contexto_busca(sessao_id: UUID) -> None:
+    """Desativa fatos de busca da conversa anterior.
+
+    Chamado quando a IA regressa para 'identificacao' — sinaliza nova conversa
+    dentro da mesma sessao (cliente voltou a cumprimentar ou mudou de assunto).
+    Sem isso, moto_modelo/posicao/pneus antigos contaminam a nova busca.
+    """
+    for chave in _FATOS_BUSCA_CONTEXTO:
+        try:
+            contexto_repo.desativar_fato_anterior(sessao_id, chave)
+        except Exception:
+            logger.exception("Falha ao limpar fato '%s' no reset para identificacao", chave)
+    logger.info("Contexto de busca limpo: sessao=%s regressou para identificacao", sessao_id)
+
+
 def _avaliar_transicao(sessao_id: UUID, etapa_atual, etapa_proposta) -> None:
     """Avalia e aplica transicao de etapa, ou registra bloqueio."""
     if etapa_proposta == etapa_atual:
@@ -422,6 +452,10 @@ def _avaliar_transicao(sessao_id: UUID, etapa_atual, etapa_proposta) -> None:
     if transicao_permitida(etapa_atual, etapa_proposta):
         sessao_repo.atualizar_etapa(sessao_id, etapa_proposta)
         logger.info("Etapa: %s -> %s", etapa_atual.value, etapa_proposta.value)
+        # Limpar contexto de busca quando regride para identificacao.
+        # Evita que moto/pneu da conversa anterior contaminem a nova.
+        if etapa_proposta == EtapaFluxo.identificacao:
+            _limpar_contexto_busca(sessao_id)
     else:
         motivo = motivo_bloqueio(etapa_atual, etapa_proposta)
         sessao_repo.atualizar_status(

@@ -83,6 +83,21 @@ def _lock_para_telefone(telefone: str) -> Lock:
 
 
 # ---------------------------------------------------------------------------
+# Lock async por telefone (evita race condition no turno completo)
+# Dois webhooks do mesmo contato nao processam em paralelo.
+# ---------------------------------------------------------------------------
+
+_turno_async_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_turno_lock(telefone: str) -> asyncio.Lock:
+    """Retorna (ou cria) um asyncio.Lock por telefone. Thread-safe via GIL do dict."""
+    if telefone not in _turno_async_locks:
+        _turno_async_locks[telefone] = asyncio.Lock()
+    return _turno_async_locks[telefone]
+
+
+# ---------------------------------------------------------------------------
 # HTTP client (ciclo de vida correto via lifespan)
 # ---------------------------------------------------------------------------
 
@@ -194,8 +209,28 @@ async def _enviar_mensagem_chatwoot(conversation_id: int, texto: str) -> None:
 
 
 async def _enviar_foto_chatwoot(conversation_id: int, foto_url: str) -> None:
-    """Envia foto como mensagem no Chatwoot (URL como texto)."""
-    await _enviar_mensagem_chatwoot(conversation_id, foto_url)
+    """Baixa imagem e envia como anexo real no Chatwoot via multipart.
+
+    Fallback: se o download ou upload falhar, envia a URL como texto.
+    """
+    try:
+        img_resp = await _http.get(foto_url, timeout=15.0)
+        img_resp.raise_for_status()
+        content_type = img_resp.headers.get("content-type", "image/webp")
+        filename = foto_url.split("/")[-1].split("?")[0] or "pneu.jpg"
+        url = (
+            f"{CHATWOOT_BASE_URL}/api/v1/accounts/{CHATWOOT_ACCOUNT_ID}"
+            f"/conversations/{conversation_id}/messages"
+        )
+        headers = {"api_access_token": CHATWOOT_API_TOKEN}
+        files = {"attachments[]": (filename, img_resp.content, content_type)}
+        data = {"message_type": "outgoing", "private": "false"}
+        resp = await _http.post(url, headers=headers, files=files, data=data)
+        resp.raise_for_status()
+        logger.info("Foto enviada como anexo: conv=%s filename=%s", conversation_id, filename)
+    except Exception as e:
+        logger.error("Falha ao enviar foto como anexo, enviando URL: %s", e)
+        await _enviar_mensagem_chatwoot(conversation_id, foto_url)
 
 
 # ---------------------------------------------------------------------------
@@ -364,34 +399,37 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     # 12. Processar em background — retorna 200 imediato pro Chatwoot
     async def _processar_e_responder():
         nonlocal content
-        try:
-            # 12a. Transcrever audios (se houver)
-            for audio_url in audios:
-                texto_audio = await _transcrever_audio(audio_url)
-                if texto_audio:
-                    content = f"{content} {texto_audio}".strip() if content else texto_audio
+        # Lock por telefone: garante que dois webhooks do mesmo contato
+        # nao processam em paralelo (evita race condition de contexto).
+        async with _get_turno_lock(telefone):
+            try:
+                # 12a. Transcrever audios (se houver)
+                for audio_url in audios:
+                    texto_audio = await _transcrever_audio(audio_url)
+                    if texto_audio:
+                        content = f"{content} {texto_audio}".strip() if content else texto_audio
 
-            sessao = await asyncio.to_thread(_obter_ou_criar_sessao, telefone)
+                sessao = await asyncio.to_thread(_obter_ou_criar_sessao, telefone)
 
-            resposta = await asyncio.to_thread(
-                processar_turno,
-                sessao.id,
-                content,
-                message_id_externo=message_id,
-                imagens=imagens or None,
-            )
+                resposta = await asyncio.to_thread(
+                    processar_turno,
+                    sessao.id,
+                    content,
+                    message_id_externo=message_id,
+                    imagens=imagens or None,
+                )
 
-            # Enviar texto
-            if resposta.texto:
-                await _enviar_mensagem_chatwoot(conversation_id, resposta.texto)
+                # Enviar texto
+                if resposta.texto:
+                    await _enviar_mensagem_chatwoot(conversation_id, resposta.texto)
 
-            # Enviar fotos
-            for foto_url in resposta.fotos or []:
-                await _enviar_foto_chatwoot(conversation_id, foto_url)
+                # Enviar fotos
+                for foto_url in resposta.fotos or []:
+                    await _enviar_foto_chatwoot(conversation_id, foto_url)
 
-        except Exception as e:
-            logger.error("Erro ao processar mensagem: %s", e, exc_info=True)
-            await _enviar_mensagem_chatwoot(conversation_id, MENSAGEM_FALHA_SEGURA)
+            except Exception as e:
+                logger.error("Erro ao processar mensagem: %s", e, exc_info=True)
+                await _enviar_mensagem_chatwoot(conversation_id, MENSAGEM_FALHA_SEGURA)
 
     background_tasks.add_task(_processar_e_responder)
 
