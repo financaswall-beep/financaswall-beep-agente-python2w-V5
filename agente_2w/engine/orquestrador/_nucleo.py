@@ -342,6 +342,100 @@ def _salvar_item_orfao_pre_busca(
     )
 
 
+def _salvar_itens_orfaos_pre_finalizacao(sessao_id: UUID) -> int:
+    """Safety net: antes de finalizar_itens ou converter_em_pedido, verifica se
+    ha pneus em ultimos_pneus_encontrados que o modelo nao salvou como item.
+
+    Caso classico: cliente confirma 3 pneus, IA diz "anotado os tres" mas so
+    emite 1 mudancas_itens:criar. Os outros 2 pneus ficam apenas no contexto
+    e o pedido fecha incompleto.
+
+    Retorna a quantidade de itens criados automaticamente.
+    """
+    fato_pneus = contexto_repo.buscar_fato_ativo(
+        sessao_id, ChaveContexto.ULTIMOS_PNEUS_ENCONTRADOS
+    )
+    if not fato_pneus or not fato_pneus.valor_json:
+        return 0
+
+    pneus_encontrados = [p for p in fato_pneus.valor_json if p.get("pneu_id")]
+    if not pneus_encontrados:
+        return 0
+
+    # Itens ativos na sessao — indexar por pneu_id para comparacao
+    itens_ativos = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
+    pneu_ids_ja_salvos = {
+        str(i.pneu_id) for i in itens_ativos if i.pneu_id
+    }
+
+    # Pneus rejeitados/cancelados — nao recriar
+    pneu_ids_cancelados: set[str] = set()
+    for item in itens_ativos:
+        if item.pneu_id and item.status_item in (
+            StatusItemProvisorio.cancelado,
+            StatusItemProvisorio.rejeitado,
+        ):
+            pneu_ids_cancelados.add(str(item.pneu_id))
+
+    criados = 0
+    for pneu in pneus_encontrados:
+        pid = str(pneu["pneu_id"])
+        if pid in pneu_ids_ja_salvos:
+            continue
+        if pid in pneu_ids_cancelados:
+            continue
+
+        try:
+            pneu_uuid = UUID(pid)
+        except (ValueError, AttributeError):
+            continue
+
+        preco = None
+        if pneu.get("preco_venda"):
+            try:
+                preco = float(pneu["preco_venda"])
+            except (ValueError, TypeError):
+                pass
+        if preco is None:
+            try:
+                from agente_2w.db import catalogo_repo as _cat
+                estoque = _cat.buscar_estoque_por_pneu(pneu_uuid)
+                if estoque and estoque.preco_venda:
+                    preco = float(estoque.preco_venda)
+            except Exception:
+                logger.exception(
+                    "Safety net finalizacao: falha ao buscar preco para %s", pneu_uuid
+                )
+
+        posicao = pneu.get("posicao")
+
+        try:
+            item_provisorio_repo.criar_item(ItemProvisorioCreate(
+                sessao_chat_id=sessao_id,
+                status_item=StatusItemProvisorio.selecionado_cliente,
+                pneu_id=pneu_uuid,
+                posicao=posicao,
+                quantidade=1,
+                preco_unitario_sugerido=preco,
+            ))
+            criados += 1
+            logger.info(
+                "Safety net finalizacao: auto-criado pneu_id=%s (preco=%s, posicao=%s)",
+                pneu_uuid, preco, posicao,
+            )
+        except Exception:
+            logger.exception(
+                "Safety net finalizacao: falha ao criar item pneu_id=%s", pneu_uuid
+            )
+
+    if criados:
+        logger.info(
+            "Safety net finalizacao: %d item(ns) orfao(s) criado(s) antes de finalizar",
+            criados,
+        )
+    return criados
+
+
 def _atualizar_nome_cliente(sessao_id: UUID, cliente_id) -> None:
     """Se nome_cliente foi registrado nos fatos e o cliente ainda nao tem nome, persiste."""
     try:
@@ -451,6 +545,12 @@ def _despachar_acoes(sessao_id: UUID, acoes: list[str]):
     Retorna o Pedido criado se converter_em_pedido foi executado, None caso contrario.
     """
     pedido_criado = None
+
+    # Safety net: garantir que todos os pneus confirmados viraram item
+    # antes de finalizar ou converter em pedido.
+    if "finalizar_itens" in acoes or "converter_em_pedido" in acoes:
+        _salvar_itens_orfaos_pre_finalizacao(sessao_id)
+
     for acao in acoes:
         if acao == "converter_em_pedido":
             try:
@@ -804,6 +904,8 @@ def processar_turno(
     if etapa_resultante.value == "fechamento" and not ja_tentou_promover:
         erros_pre = validar_pre_condicoes(sessao_id)
         if not erros_pre:
+            # Safety net: garantir itens orfaos antes de promover automaticamente
+            _salvar_itens_orfaos_pre_finalizacao(sessao_id)
             try:
                 pedido_criado = promover_para_pedido(sessao_id)
                 logger.info(

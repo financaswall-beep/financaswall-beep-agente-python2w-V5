@@ -49,6 +49,23 @@ def _aplicar_guardrail(envelope, etapa_atual):
     # o cliente pode rejeitar um item e confirmar outro (itens diferentes).
     # Nao remover nenhum dos dois.
 
+    # Regra 5: finalizar_itens sem nenhum mudancas_itens:criar neste turno
+    # e mensagem contendo "anotado"/"registrado" → warning (a rede de seguranca
+    # em _despachar_acoes cria os itens ausentes, mas o log ajuda a diagnosticar).
+    if "finalizar_itens" in acoes:
+        tem_criar = any(
+            getattr(m, "acao", None) == "criar"
+            for m in getattr(envelope, "mudancas_itens", [])
+        )
+        msg = getattr(envelope, "mensagem_cliente", "") or ""
+        _palavras_confirmacao = ("anotado", "registrado", "confirmado", "os dois", "os três")
+        menciona_confirmacao = any(p in msg.lower() for p in _palavras_confirmacao)
+        if not tem_criar and menciona_confirmacao:
+            logger.warning(
+                "Guardrail alerta: finalizar_itens com mensagem de confirmacao "
+                "mas sem mudancas_itens:criar — safety net vai compensar"
+            )
+
     envelope.acoes_sugeridas = acoes
     envelope.etapa_atual = etapa
     return envelope
