@@ -377,12 +377,31 @@ def _salvar_itens_orfaos_pre_finalizacao(sessao_id: UUID) -> int:
         ):
             pneu_ids_cancelados.add(str(item.pneu_id))
 
+    # Posicoes ja cobertas por itens salvos — evita criar pneu da mesma
+    # posicao que o cliente nao pediu (ex: busca trouxe 3 traseiros,
+    # cliente escolheu 1, safety net nao deve criar os outros 2).
+    posicoes_ja_cobertas: set[str] = set()
+    for item in itens_ativos:
+        if item.posicao and item.pneu_id and str(item.pneu_id) in pneu_ids_ja_salvos:
+            posicoes_ja_cobertas.add(item.posicao.lower().strip())
+
     criados = 0
     for pneu in pneus_encontrados:
         pid = str(pneu["pneu_id"])
         if pid in pneu_ids_ja_salvos:
             continue
         if pid in pneu_ids_cancelados:
+            continue
+
+        posicao = pneu.get("posicao")
+
+        # Filtro por posicao: se ja existe item salvo com mesma posicao,
+        # nao criar — provavelmente o cliente escolheu outro da mesma posicao.
+        if posicao and posicao.lower().strip() in posicoes_ja_cobertas:
+            logger.debug(
+                "Safety net finalizacao: pneu_id=%s ignorado (posicao '%s' ja coberta)",
+                pid, posicao,
+            )
             continue
 
         try:
@@ -406,8 +425,6 @@ def _salvar_itens_orfaos_pre_finalizacao(sessao_id: UUID) -> int:
                 logger.exception(
                     "Safety net finalizacao: falha ao buscar preco para %s", pneu_uuid
                 )
-
-        posicao = pneu.get("posicao")
 
         try:
             item_provisorio_repo.criar_item(ItemProvisorioCreate(
