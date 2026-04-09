@@ -113,7 +113,8 @@ def buscar_pneus(
         )
 
     # Log de demanda — registra busca por medida/marca (antes so logava busca por moto)
-    _termo = medida_texto or marca_modelo or f"{largura}/{perfil}-{aro}"
+    # Campo moto: so preenche com marca_modelo (ex: "Pirelli"). Medida vai nos campos proprios.
+    _moto = marca_modelo or ""
     _preco = None
     _larg = largura
     _perf = perfil
@@ -127,7 +128,7 @@ def buscar_pneus(
         if not _ar:
             _ar = resultados[0].get("aro")
     log_demanda_pneu_repo.registrar_busca(
-        moto=_termo,
+        moto=_moto,
         posicao="",
         tinha_estoque=len(resultados) > 0,
         fonte_resolucao="catalogo",
