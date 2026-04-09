@@ -246,7 +246,7 @@ async def _transcrever_audio(audio_url: str) -> str:
     Retorna o texto transcrito ou string vazia se falhar.
     """
     try:
-        resp = await _http.get(audio_url, timeout=30.0)
+        resp = await _http.get(audio_url, timeout=30.0, follow_redirects=True)
         resp.raise_for_status()
     except Exception as e:
         logger.error("Falha ao baixar audio: %s", e)
