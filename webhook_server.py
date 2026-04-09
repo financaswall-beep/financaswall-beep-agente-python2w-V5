@@ -374,17 +374,22 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     # 10. Extrair imagens e audios dos attachments
     attachments = data.get("attachments") or []
 
-    # Log de diagnostico: registra file_type de cada attachment para depuracao
-    for a in attachments:
-        logger.info(
-            "Attachment recebido: file_type=%s url=%s data_url=%s",
-            a.get("file_type"), a.get("url", "")[:80], a.get("data_url", "")[:80],
-        )
+    # Log de diagnostico: registra TUDO do attachment para depuracao
+    if attachments:
+        for idx, a in enumerate(attachments):
+            logger.info("Attachment[%d]: %s", idx, {k: str(v)[:120] for k, v in a.items()})
+    elif not content:
+        # Sem attachments e sem texto — logar payload pra entender o que o Chatwoot mandou
+        _keys_to_log = {
+            k: str(v)[:200] for k, v in data.items()
+            if k not in ("conversation",)
+        }
+        logger.warning("Mensagem sem texto e sem attachments. Keys do payload: %s", _keys_to_log)
 
     imagens = [
         a.get("data_url") or a.get("url", "")
         for a in attachments
-        if a.get("file_type") in ("image", "image_file")
+        if str(a.get("file_type", "")).lower() in ("image", "image_file")
     ]
     imagens = [u for u in imagens if u]
 
@@ -396,6 +401,23 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
         or str(a.get("file_type", "")).lower().startswith("audio")
     ]
     audios = [u for u in audios if u]
+
+    # Fallback agressivo: se não detectou como áudio mas tem attachment com URL
+    # e content está vazio, tenta transcrever o primeiro attachment como áudio.
+    # Comum quando Chatwoot/Baileys manda file_type inesperado ou None.
+    if not audios and not content and attachments:
+        fallback_urls = [
+            a.get("data_url") or a.get("url", "")
+            for a in attachments
+            if (a.get("data_url") or a.get("url", ""))
+            and str(a.get("file_type", "")).lower() not in ("image", "image_file")
+        ]
+        if fallback_urls:
+            logger.info(
+                "Fallback audio: tentando transcrever %d attachment(s) sem file_type audio reconhecido",
+                len(fallback_urls),
+            )
+            audios = fallback_urls
 
     # 11. Texto vazio sem imagens e sem audios — pedir descricao
     if not content and not imagens and not audios:
