@@ -17,6 +17,7 @@ from agente_2w.engine.sessao_timeout import (
     SituacaoSessao,
     TIMEOUT_BLOQUEADA_HORAS,
     TIMEOUT_SESSAO_DIAS,
+    TIMEOUT_POS_PEDIDO_HORAS,
 )
 from agente_2w.engine.montador_contexto import montar_contexto
 from agente_2w.engine.maquina_estados import transicao_permitida, motivo_bloqueio, proximas_etapas
@@ -79,7 +80,11 @@ def _resolver_timeout(sessao) -> UUID:
     para nao interromper o atendimento.
     """
     try:
-        situacao = avaliar_sessao(sessao)
+        # Verificar se sessao tem pedido (necessario para timeout pos-pedido)
+        from agente_2w.db import pedido_repo
+        tem_pedido = pedido_repo.buscar_pedido_por_sessao(sessao.id) is not None
+
+        situacao = avaliar_sessao(sessao, tem_pedido=tem_pedido)
 
         if situacao == SituacaoSessao.ok:
             return sessao.id
@@ -91,6 +96,22 @@ def _resolver_timeout(sessao) -> UUID:
                 sessao.id, TIMEOUT_BLOQUEADA_HORAS,
             )
             return sessao.id
+
+        if situacao == SituacaoSessao.expirada_pos_pedido:
+            # Sessao com pedido criado expirou apos 48h — fechar e criar nova
+            sessao_repo.fechar_sessao(sessao.id)
+            nova = sessao_repo.criar_sessao(SessaoChatCreate(
+                canal=sessao.canal,
+                contato_externo=sessao.contato_externo,
+                etapa_atual=EtapaFluxo.identificacao,
+                status_sessao=StatusSessao.ativa,
+            ))
+            logger.info(
+                "Sessao %s (pos-pedido) encerrada por inatividade (%dh). "
+                "Nova sessao criada: %s",
+                sessao.id, TIMEOUT_POS_PEDIDO_HORAS, nova.id,
+            )
+            return nova.id
 
         # expirada_com_contexto ou expirada_sem_contexto
         sessao_repo.fechar_sessao(sessao.id)
@@ -909,6 +930,45 @@ def processar_turno(
 
     # --- 10. Despachar acoes sugeridas ---
     pedido_criado = _despachar_acoes(sessao_id, envelope.acoes_sugeridas)
+
+    # --- 10b. Layer 2: detectar nova intencao de compra pos-pedido ---
+    # Se a sessao esta em fechamento com pedido criado e a IA emitiu acao
+    # de busca (buscar_por_moto/buscar_por_medida), o cliente quer comprar
+    # de novo. Fechar sessao atual e criar nova para a nova compra.
+    _ACOES_BUSCA = {"buscar_por_moto", "buscar_por_medida"}
+    _acoes_set = set(envelope.acoes_sugeridas)
+    if (
+        contexto.sessao.etapa_atual == EtapaFluxo.fechamento
+        and _acoes_set & _ACOES_BUSCA
+        and not pedido_criado
+    ):
+        from agente_2w.db import pedido_repo as _ped_repo
+        pedido_existente = _ped_repo.buscar_pedido_por_sessao(sessao_id)
+        if pedido_existente:
+            logger.info(
+                "Layer 2: nova intencao de compra detectada (acoes=%s) em sessao %s "
+                "com pedido #%s. Fechando sessao e criando nova.",
+                _acoes_set & _ACOES_BUSCA, sessao_id, pedido_existente.numero_pedido,
+            )
+            sessao_repo.fechar_sessao(sessao_id)
+            nova_sessao = sessao_repo.criar_sessao(SessaoChatCreate(
+                canal=sessao_pre.canal,
+                contato_externo=sessao_pre.contato_externo,
+                etapa_atual=EtapaFluxo.identificacao,
+                status_sessao=StatusSessao.ativa,
+            ))
+            # Vincular mesmo cliente
+            if sessao_pre.cliente_id:
+                sessao_repo.vincular_cliente(nova_sessao.id, sessao_pre.cliente_id)
+            logger.info("Layer 2: nova sessao %s criada. Reprocessando mensagem.", nova_sessao.id)
+            # Reprocessar a mensagem na nova sessao (recursao controlada — 1 nivel)
+            return processar_turno(
+                nova_sessao.id,
+                mensagem_texto,
+                criado_em=criado_em,
+                message_id_externo=message_id_externo,
+                imagens=imagens,
+            )
 
     # --- 11. Avaliar transicao de etapa ---
     _avaliar_transicao(sessao_id, contexto.sessao.etapa_atual, envelope.etapa_atual)
