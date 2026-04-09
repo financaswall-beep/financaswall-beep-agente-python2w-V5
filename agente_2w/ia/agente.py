@@ -129,6 +129,7 @@ def chamar_agente(
         "buscar_pneus_por_moto": lambda termo_moto, posicao=None: buscar_pneus_por_moto(
             termo_moto=termo_moto, posicao=posicao, sessao_id=sessao_id
         ),
+        "buscar_pneus": lambda **kwargs: buscar_pneus(**kwargs, sessao_id=sessao_id),
     }
 
     for round_num in range(MAX_TOOL_ROUNDS):

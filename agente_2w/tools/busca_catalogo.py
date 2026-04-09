@@ -89,6 +89,7 @@ def buscar_pneus(
     aro: int | None = None,
     medida_texto: str | None = None,
     marca_modelo: str | None = None,
+    sessao_id: UUID | None = None,
 ) -> dict:
     """Busca pneus no catálogo por dimensões, texto de medida ou marca/modelo.
 
@@ -136,6 +137,7 @@ def buscar_pneus(
         perfil=_perf,
         aro=_ar,
         preco_encontrado=float(_preco) if _preco else None,
+        sessao_id=sessao_id,
     )
 
     return {
