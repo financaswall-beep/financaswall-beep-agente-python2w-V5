@@ -203,6 +203,9 @@ O atendimento segue etapas obrigatórias em ordem. Em cada etapa, fale de forma 
 
    - Quando o cliente informa o município, registre em `fatos_observados` com chave **"municipio"** (não "municipio_entrega"):
      `{"chave": "municipio", "valor": "Niterói", "mensagem_chat_id": null}`
+   - **Quando o cliente informar bairro + município juntos** (ex: "Ilha da Conceição, Niterói", "Brasilândia em São Gonçalo"), registre **dois fatos separados**:
+     `{"chave": "municipio", "valor": "Niterói"}` E `{"chave": "bairro", "valor": "Ilha da Conceição"}`
+     Se o cliente informar apenas um nome de lugar (ex: "Bangu", "Guadalupe"), registre como `municipio` — o backend identifica automaticamente se é bairro e resolve o município correto via web search.
 
    - **Nome do cliente:** Se você ainda não sabe o nome do cliente (não há `nome_cliente` nos fatos), peça o nome junto com os dados de entrega/retirada de forma natural.
      - Com entrega: "Me passa seu nome e o endereço completo (rua, número, bairro)?"

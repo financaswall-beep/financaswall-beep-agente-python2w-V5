@@ -846,10 +846,11 @@ def processar_turno(
     # --- 7. Aplicar fatos inferidos ---
     _aplicar_fatos_inferidos(sessao_id, envelope.fatos_inferidos)
 
-    # --- 7b. Persistir nome do cliente se foi registrado neste turno ---
+    # --- 7b. Persistir nome e localidade do cliente se registrados neste turno ---
     sessao_apos_fatos = sessao_repo.buscar_sessao_por_id(sessao_id)
     if sessao_apos_fatos and sessao_apos_fatos.cliente_id:
         _atualizar_nome_cliente(sessao_id, sessao_apos_fatos.cliente_id)
+        _atualizar_localidade_cliente(sessao_id, sessao_apos_fatos.cliente_id)
 
     # --- 7c. Cancelamento solicitado via fato ---
     fato_cancel = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.PEDIDO_CANCELAMENTO_SOLICITADO)
