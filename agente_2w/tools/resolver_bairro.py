@@ -239,11 +239,15 @@ def resolver_bairro_municipio(
     municipio = municipios[0] if municipios else None
 
     # 3. Salva no cache (inclusive None = fora de cobertura, para evitar re-consulta)
-    bairro_municipio_cache_repo.salvar(
-        termo_original=termo,
-        bairro=bairro,
-        municipio=municipio,
-        fonte="web_search",
-    )
+    # Try/except: falha no cache NAO pode impedir o registro do frete
+    try:
+        bairro_municipio_cache_repo.salvar(
+            termo_original=termo,
+            bairro=bairro,
+            municipio=municipio,
+            fonte="web_search",
+        )
+    except Exception:
+        logger.warning("Falha ao salvar cache para '%s' — continuando sem cache", termo)
 
     return bairro, municipio, None
