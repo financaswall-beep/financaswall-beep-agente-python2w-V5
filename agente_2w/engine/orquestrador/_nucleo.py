@@ -229,6 +229,119 @@ def _persistir_pneus_encontrados(sessao_id: UUID, pneus: list[dict]) -> None:
         logger.exception("Erro ao persistir pneus encontrados")
 
 
+def _salvar_item_orfao_pre_busca(
+    sessao_id: UUID, contexto, envelope, novos_pneus: list[dict]
+) -> None:
+    """Safety net: antes de nova busca sobrescrever ultimos_pneus_encontrados,
+    verifica se havia pneu(s) nos resultados anteriores que a IA nao salvou.
+
+    Caso classico: cliente diz "serve sim, tem pra Fan tambem?" — a IA faz
+    nova busca (Fan) sem criar item para o pneu anterior (Twister).
+    Os resultados da Fan sobrescrevem os da Twister e ela se perde.
+
+    Condicoes (TODAS devem ser verdadeiras):
+    1. Nova busca retornou resultados (novos_pneus nao vazio)
+    2. Resultados anteriores tinham exatamente 1 pneu (sem ambiguidade)
+    3. Nenhum item_provisorio ativo com esse pneu_id na sessao
+    4. IA nao criou item para esse pneu_id em mudancas_itens deste turno
+    5. Nenhum sinal de rejeicao (fato ativo OU fato deste turno OU acao rejeitar/cancelar)
+    6. Etapa atual era oferta ou busca (cliente estava recebendo proposta)
+    """
+    if not novos_pneus:
+        return
+
+    # Condicao 6: so em oferta ou busca
+    etapa = contexto.sessao.etapa_atual
+    if etapa not in (EtapaFluxo.oferta, EtapaFluxo.busca):
+        return
+
+    # Buscar resultados anteriores no contexto
+    fato_pneus = contexto_repo.buscar_fato_ativo(
+        sessao_id, ChaveContexto.ULTIMOS_PNEUS_ENCONTRADOS
+    )
+    if not fato_pneus or not fato_pneus.valor_json:
+        return
+
+    pneus_antigos = [p for p in fato_pneus.valor_json if p.get("pneu_id")]
+
+    # Condicao 2: exatamente 1 pneu (sem ambiguidade de qual o cliente queria)
+    if len(pneus_antigos) != 1:
+        if len(pneus_antigos) > 1:
+            logger.debug(
+                "Safety net skip: %d pneus nos resultados anteriores (ambiguo)",
+                len(pneus_antigos),
+            )
+        return
+
+    pneu_antigo = pneus_antigos[0]
+    pneu_id_str = str(pneu_antigo["pneu_id"])
+
+    # Condicao 3: nenhum item ativo com esse pneu_id
+    itens_ativos = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
+    if any(i.pneu_id and str(i.pneu_id) == pneu_id_str for i in itens_ativos):
+        return  # Ja existe — tudo ok
+
+    # Condicao 4: IA nao criou item para esse pneu neste turno
+    for m in envelope.mudancas_itens:
+        if m.acao == "criar" and m.dados and str(m.dados.get("pneu_id", "")) == pneu_id_str:
+            return  # IA tratou corretamente
+
+    # Condicao 5a: sem rejeicao no banco
+    fato_recusa = contexto_repo.buscar_fato_ativo(
+        sessao_id, ChaveContexto.CLIENTE_RECUSOU_OPCAO_ATUAL
+    )
+    if fato_recusa:
+        return
+
+    # Condicao 5b: sem rejeicao nos fatos DESTE turno (ainda nao persistidos)
+    for fato in envelope.fatos_observados:
+        if fato.chave == ChaveContexto.CLIENTE_RECUSOU_OPCAO_ATUAL:
+            return
+
+    # Condicao 5c: sem acao de rejeitar/cancelar item neste turno
+    for m in envelope.mudancas_itens:
+        if m.acao in ("rejeitar", "cancelar"):
+            return
+
+    # Todas as condicoes atendidas — criar item automaticamente
+    try:
+        pneu_uuid = UUID(pneu_id_str)
+    except (ValueError, AttributeError):
+        return
+
+    # Preco: primeiro tenta dos resultados, depois busca no DB
+    preco = None
+    if pneu_antigo.get("preco_venda"):
+        try:
+            preco = float(pneu_antigo["preco_venda"])
+        except (ValueError, TypeError):
+            pass
+    if preco is None:
+        try:
+            from agente_2w.db import catalogo_repo as _cat
+            estoque = _cat.buscar_estoque_por_pneu(pneu_uuid)
+            if estoque and estoque.preco_venda:
+                preco = float(estoque.preco_venda)
+        except Exception:
+            logger.exception("Safety net: falha ao buscar preco no DB para %s", pneu_uuid)
+
+    posicao = pneu_antigo.get("posicao")
+
+    item_provisorio_repo.criar_item(ItemProvisorioCreate(
+        sessao_chat_id=sessao_id,
+        status_item=StatusItemProvisorio.selecionado_cliente,
+        pneu_id=pneu_uuid,
+        posicao=posicao,
+        quantidade=1,
+        preco_unitario_sugerido=preco,
+    ))
+    logger.info(
+        "Safety net item-orfao: auto-criado pneu_id=%s (preco=%s, posicao=%s) "
+        "antes de nova busca sobrescrever resultados",
+        pneu_uuid, preco, posicao,
+    )
+
+
 def _atualizar_nome_cliente(sessao_id: UUID, cliente_id) -> None:
     """Se nome_cliente foi registrado nos fatos e o cliente ainda nao tem nome, persiste."""
     try:
@@ -572,6 +685,8 @@ def processar_turno(
             "pneus coletados das tools: %s",
             [p["pneu_id"] for p in pneus_encontrados],
         )
+        # Safety net: salvar item orfao antes que nova busca sobrescreva
+        _salvar_item_orfao_pre_busca(sessao_id, contexto, envelope, pneus_encontrados)
         # Persistir no contexto para turnos seguintes (ex: oferta sem tool call)
         _persistir_pneus_encontrados(sessao_id, pneus_encontrados)
     else:
