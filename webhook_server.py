@@ -372,19 +372,25 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
         return {"status": "ignored", "reason": "duplicate"}
 
     # 10. Extrair imagens e audios dos attachments
+    # Chatwoot pode mandar attachments em dois lugares diferentes:
+    # - data["attachments"] → formato padrao
+    # - data["content_attributes"]["attachments"] → formato Baileys/WhatsApp (audio, video)
     attachments = data.get("attachments") or []
+    content_attributes = data.get("content_attributes") or {}
+    attachments_ca = content_attributes.get("attachments") or []
+    if attachments_ca and not attachments:
+        attachments = attachments_ca
+        logger.warning("Attachments vindos de content_attributes (Baileys): %d item(s)", len(attachments))
 
-    # Log de diagnostico: registra TUDO do attachment para depuracao
+    # Log de diagnostico em WARNING para garantir visibilidade independente do log level
     if attachments:
         for idx, a in enumerate(attachments):
-            logger.info("Attachment[%d]: %s", idx, {k: str(v)[:120] for k, v in a.items()})
-    elif not content:
-        # Sem attachments e sem texto — logar payload pra entender o que o Chatwoot mandou
-        _keys_to_log = {
-            k: str(v)[:200] for k, v in data.items()
-            if k not in ("conversation",)
-        }
-        logger.warning("Mensagem sem texto e sem attachments. Keys do payload: %s", _keys_to_log)
+            logger.warning("DIAG Attachment[%d]: %s", idx, {k: str(v)[:200] for k, v in a.items()})
+    else:
+        # Sem attachments em nenhum lugar — logar payload completo para depuracao
+        _diag = {k: str(v)[:300] for k, v in data.items() if k not in ("conversation",)}
+        logger.warning("DIAG sem-attachment: content=%r content_attributes=%r payload_keys=%s",
+                       content, content_attributes, list(data.keys()))
 
     imagens = [
         a.get("data_url") or a.get("url", "")
@@ -402,9 +408,7 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     ]
     audios = [u for u in audios if u]
 
-    # Fallback agressivo: se não detectou como áudio mas tem attachment com URL
-    # e content está vazio, tenta transcrever o primeiro attachment como áudio.
-    # Comum quando Chatwoot/Baileys manda file_type inesperado ou None.
+    # Fallback agressivo: qualquer attachment com URL que nao seja imagem → tenta como audio
     if not audios and not content and attachments:
         fallback_urls = [
             a.get("data_url") or a.get("url", "")
@@ -413,8 +417,8 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
             and str(a.get("file_type", "")).lower() not in ("image", "image_file")
         ]
         if fallback_urls:
-            logger.info(
-                "Fallback audio: tentando transcrever %d attachment(s) sem file_type audio reconhecido",
+            logger.warning(
+                "DIAG Fallback audio: transcrevendo %d attachment(s) com file_type nao reconhecido",
                 len(fallback_urls),
             )
             audios = fallback_urls
