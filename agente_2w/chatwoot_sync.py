@@ -117,7 +117,7 @@ def resolver_conversa(conv_id: int) -> None:
         return
     try:
         url = f"{_base()}/conversations/{conv_id}/toggle_status"
-        resp = _client().patch(url, json={"status": "resolved"}, headers=_headers())
+        resp = _client().post(url, json={"status": "resolved"}, headers=_headers())
         resp.raise_for_status()
         logger.info("Conversa %d marcada como resolvida", conv_id)
     except Exception:
