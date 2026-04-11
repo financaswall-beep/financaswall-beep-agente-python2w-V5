@@ -873,6 +873,13 @@ def processar_turno(
         cancelado = cancelar_pedido_sessao(sessao_id)
         if cancelado:
             logger.info("Pedido da sessao %s cancelado via fato", sessao_id)
+            if chatwoot_conv_id:
+                from agente_2w.db import pedido_repo as _ped_repo
+                _pedido = _ped_repo.buscar_pedido_por_sessao(sessao_id)
+                chatwoot_sync.sincronizar_cancelamento(
+                    chatwoot_conv_id,
+                    numero_pedido=_pedido.numero_pedido if _pedido else None,
+                )
 
     # --- 8. Aplicar mudancas de contexto ---
     _aplicar_mudancas_contexto(sessao_id, envelope.mudancas_contexto)

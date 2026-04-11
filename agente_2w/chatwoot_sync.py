@@ -163,3 +163,10 @@ def sincronizar_pedido_criado(conv_id: int, numero_pedido: int | str, valor_tota
     adicionar_label(conv_id, "pedido_criado")
     valor_fmt = f"R$ {float(valor_total):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     nota_privada(conv_id, f"Pedido #{numero_pedido} criado — {valor_fmt}")
+
+
+def sincronizar_cancelamento(conv_id: int, numero_pedido: int | str | None = None) -> None:
+    """Adiciona label pedido_cancelado e nota privada informando o cancelamento."""
+    adicionar_label(conv_id, "pedido_cancelado")
+    texto = f"Pedido #{numero_pedido} cancelado pelo cliente" if numero_pedido else "Pedido cancelado pelo cliente"
+    nota_privada(conv_id, texto)
