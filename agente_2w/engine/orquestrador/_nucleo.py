@@ -949,8 +949,14 @@ def processar_turno(
     # --- 10. Despachar acoes sugeridas ---
     pedido_criado = _despachar_acoes(sessao_id, envelope.acoes_sugeridas)
     if chatwoot_conv_id and pedido_criado:
+        _municipio_fato = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.MUNICIPIO)
         chatwoot_sync.sincronizar_pedido_criado(
-            chatwoot_conv_id, pedido_criado.numero_pedido, pedido_criado.valor_total,
+            chatwoot_conv_id,
+            pedido_criado.numero_pedido,
+            pedido_criado.valor_total,
+            forma_pagamento=pedido_criado.forma_pagamento.value,
+            tipo_entrega=pedido_criado.tipo_entrega.value,
+            municipio=_municipio_fato.valor_texto if _municipio_fato else None,
         )
 
     # --- 10b. Layer 2: detectar nova intencao de compra pos-pedido ---
@@ -1023,8 +1029,14 @@ def processar_turno(
                     pedido_criado.numero_pedido, pedido_criado.valor_total,
                 )
                 if chatwoot_conv_id:
+                    _municipio_fato = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.MUNICIPIO)
                     chatwoot_sync.sincronizar_pedido_criado(
-                        chatwoot_conv_id, pedido_criado.numero_pedido, pedido_criado.valor_total,
+                        chatwoot_conv_id,
+                        pedido_criado.numero_pedido,
+                        pedido_criado.valor_total,
+                        forma_pagamento=pedido_criado.forma_pagamento.value,
+                        tipo_entrega=pedido_criado.tipo_entrega.value,
+                        municipio=_municipio_fato.valor_texto if _municipio_fato else None,
                     )
                 sessao_atual = sessao_repo.buscar_sessao_por_id(sessao_id)
                 if sessao_atual and sessao_atual.cliente_id:

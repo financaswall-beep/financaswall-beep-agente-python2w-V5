@@ -158,11 +158,44 @@ def sincronizar_custom_attributes(contact_id: int, cliente: Cliente) -> None:
         logger.warning("Falha ao sincronizar custom attributes do contato %s", contact_id, exc_info=True)
 
 
-def sincronizar_pedido_criado(conv_id: int, numero_pedido: int | str, valor_total: Decimal | float) -> None:
-    """Adiciona label pedido_criado e nota privada com resumo do pedido."""
+def atualizar_conversa_attrs(conv_id: int, attrs: dict) -> None:
+    """Atualiza custom attributes da conversa (visíveis na lateral do Chatwoot)."""
+    if not _habilitado() or not conv_id or not attrs:
+        return
+    try:
+        url = f"{_base()}/conversations/{conv_id}/custom_attributes"
+        resp = _client().post(url, json={"custom_attributes": attrs}, headers=_headers())
+        resp.raise_for_status()
+        logger.debug("Conversa %d attrs atualizados: %s", conv_id, list(attrs.keys()))
+    except Exception:
+        logger.warning("Falha ao atualizar attrs da conv %d", conv_id, exc_info=True)
+
+
+def sincronizar_pedido_criado(
+    conv_id: int,
+    numero_pedido: int | str,
+    valor_total: Decimal | float,
+    forma_pagamento: str | None = None,
+    tipo_entrega: str | None = None,
+    municipio: str | None = None,
+) -> None:
+    """Adiciona label pedido_criado, nota privada e custom attributes na conversa."""
     adicionar_label(conv_id, "pedido_criado")
     valor_fmt = f"R$ {float(valor_total):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     nota_privada(conv_id, f"Pedido #{numero_pedido} criado — {valor_fmt}")
+
+    # Custom attributes na conversa (barra lateral)
+    attrs: dict = {
+        "numero_pedido": int(numero_pedido) if numero_pedido else None,
+        "valor_total": valor_fmt,
+    }
+    if forma_pagamento:
+        attrs["forma_pagamento"] = forma_pagamento
+    if tipo_entrega:
+        attrs["tipo_entrega"] = tipo_entrega
+    if municipio:
+        attrs["municipio"] = municipio
+    atualizar_conversa_attrs(conv_id, attrs)
 
 
 def sincronizar_cancelamento(conv_id: int, numero_pedido: int | str | None = None) -> None:
