@@ -297,6 +297,12 @@ async def health():
         raise HTTPException(status_code=503, detail="Supabase indisponivel")
 
 
+@app.get("/version")
+async def version():
+    """Retorna versao do codigo deployado."""
+    return {"version": "2026-04-11b", "chatwoot_conv_id_fix": True}
+
+
 @app.post("/webhook/chatwoot")
 async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     """Recebe webhooks do Chatwoot para mensagens recebidas."""
@@ -335,6 +341,7 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     inbox_id = conversation.get("inbox_id") or data.get("inbox", {}).get("id")
     sender = data.get("sender", {})
     sender_meta = conversation.get("meta", {}).get("sender", {})
+    chatwoot_contact_id = sender.get("id") or sender_meta.get("id")
 
     # 6. Gerar message_id robusto
     raw_id = data.get("id")
@@ -453,6 +460,8 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                     content,
                     message_id_externo=message_id,
                     imagens=imagens or None,
+                    chatwoot_conv_id=conversation_id,
+                    chatwoot_contact_id=chatwoot_contact_id,
                 )
 
                 # Enviar texto

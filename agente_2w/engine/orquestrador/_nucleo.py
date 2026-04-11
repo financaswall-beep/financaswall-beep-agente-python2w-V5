@@ -25,6 +25,7 @@ from agente_2w.engine.promotor import promover_para_pedido, validar_pre_condicoe
 from agente_2w.ia.agente import chamar_agente
 from agente_2w.ia.parser_envelope import parse_resposta, ParseError
 from agente_2w.ia.prompt_retry import montar_prompt_retry
+from agente_2w import chatwoot_sync
 from agente_2w.enums.enums import (
     Direcao,
     EtapaFluxo,
@@ -758,6 +759,8 @@ def processar_turno(
     criado_em: datetime | None = None,
     message_id_externo: str | None = None,
     imagens: list[str] | None = None,
+    chatwoot_conv_id: int | None = None,
+    chatwoot_contact_id: int | None = None,
 ) -> RespostaTurno:
     """Processa um turno completo da conversa.
 
@@ -798,6 +801,8 @@ def processar_turno(
             cliente = cliente_repo.resolver_ou_criar_cliente(sessao.contato_externo)
             sessao_repo.vincular_cliente(sessao_id, cliente.id)
             logger.info("Cliente resolvido: %s", cliente.id)
+            if chatwoot_contact_id:
+                chatwoot_sync.sincronizar_custom_attributes(chatwoot_contact_id, cliente)
         except Exception:
             logger.exception("Falha ao resolver cliente")
 
@@ -931,6 +936,10 @@ def processar_turno(
 
     # --- 10. Despachar acoes sugeridas ---
     pedido_criado = _despachar_acoes(sessao_id, envelope.acoes_sugeridas)
+    if chatwoot_conv_id and pedido_criado:
+        chatwoot_sync.sincronizar_pedido_criado(
+            chatwoot_conv_id, pedido_criado.numero_pedido, pedido_criado.valor_total,
+        )
 
     # --- 10b. Layer 2: detectar nova intencao de compra pos-pedido ---
     # Se a sessao esta em fechamento com pedido criado e a IA emitiu acao
@@ -969,10 +978,21 @@ def processar_turno(
                 criado_em=criado_em,
                 message_id_externo=message_id_externo,
                 imagens=imagens,
+                chatwoot_conv_id=chatwoot_conv_id,
+                chatwoot_contact_id=chatwoot_contact_id,
             )
 
     # --- 11. Avaliar transicao de etapa ---
     _avaliar_transicao(sessao_id, contexto.sessao.etapa_atual, envelope.etapa_atual)
+    if chatwoot_conv_id:
+        _etapa_antiga = contexto.sessao.etapa_atual
+        _etapa_efetiva = (
+            envelope.etapa_atual
+            if envelope.etapa_atual == _etapa_antiga
+            or transicao_permitida(_etapa_antiga, envelope.etapa_atual)
+            else _etapa_antiga
+        )
+        chatwoot_sync.sincronizar_etapa(chatwoot_conv_id, _etapa_efetiva.value)
 
     # --- 12. Auto-promover em fechamento se pre-condicoes ok ---
     # Se a etapa resultante e fechamento e o promotor nao foi chamado
