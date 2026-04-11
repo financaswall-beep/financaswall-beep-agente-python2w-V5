@@ -218,9 +218,6 @@ _NOMES_BOT_PATTERNS = re.compile(
 
 def _eh_bot_ou_empresa(identifier: str, nome: str, telefone: str) -> bool:
     """Retorna True se o remetente parece ser um bot ou conta corporativa."""
-    # Identifier terminando em @lid = WhatsApp Business API / bot
-    if identifier and identifier.endswith("@lid"):
-        return True
     # Telefone na blocklist
     if telefone in _TELEFONES_BLOQUEADOS:
         return True
