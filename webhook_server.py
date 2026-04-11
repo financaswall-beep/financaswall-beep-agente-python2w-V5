@@ -124,7 +124,6 @@ async def _auto_resolver_conversas(horas: int = 72) -> int:
         res = (
             supabase.table("sessao_chat")
             .select("id, chatwoot_conv_id")
-            .eq("status_sessao", "fechada")
             .not_.is_("chatwoot_conv_id", "null")
             .lt("ultima_interacao_em", corte)
             .execute()
