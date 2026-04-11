@@ -422,8 +422,22 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
         logger.info("Webhook ignorado: event=%s", event)
         return {"status": "ignored", "event": event}
 
-    # 3. Filtrar: so processar mensagens incoming (do cliente)
+    # 2b. Comandos do operador (!stop / !start) — interceptar ANTES do filtro incoming
     message_type = data.get("message_type")
+    content_raw = (data.get("content") or "").strip().lower()
+    conversation = data.get("conversation", {})
+    conversation_id = conversation.get("id")
+
+    if message_type in (1, "outgoing") and content_raw in ("!stop", "!start") and conversation_id:
+        if content_raw == "!stop":
+            _conversas_silenciadas.add(conversation_id)
+            logger.info("!stop: bot silenciado na conv %s pelo operador", conversation_id)
+        else:
+            _conversas_silenciadas.discard(conversation_id)
+            logger.info("!start: bot liberado na conv %s pelo operador", conversation_id)
+        return {"status": "ok", "command": content_raw, "conversation_id": conversation_id}
+
+    # 3. Filtrar: so processar mensagens incoming (do cliente)
     if message_type not in (0, "incoming"):
         logger.info("Webhook ignorado: message_type=%s", message_type)
         return {"status": "ignored", "reason": "not_incoming"}
@@ -435,8 +449,6 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
 
     # 5. Extrair dados basicos
     content = (data.get("content") or "").strip()
-    conversation = data.get("conversation", {})
-    conversation_id = conversation.get("id")
     inbox_id = conversation.get("inbox_id") or data.get("inbox", {}).get("id")
     sender = data.get("sender", {})
     sender_meta = conversation.get("meta", {}).get("sender", {})
