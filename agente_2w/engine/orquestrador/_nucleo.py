@@ -886,6 +886,18 @@ def processar_turno(
         except Exception:
             logger.exception("Falha ao resolver cliente")
 
+    # --- 2b. Urgencia VIP: marcar prioridade urgent no Chatwoot ---
+    if chatwoot_conv_id:
+        try:
+            _s_vip = sessao_repo.buscar_sessao_por_id(sessao_id)
+            if _s_vip and _s_vip.cliente_id:
+                _cli_vip = cliente_repo.buscar_cliente_por_id(_s_vip.cliente_id)
+                if _cli_vip and _cli_vip.segmento == "vip":
+                    chatwoot_sync.definir_prioridade(chatwoot_conv_id, "urgent")
+                    logger.info("VIP: prioridade urgent na conv %d", chatwoot_conv_id)
+        except Exception:
+            logger.exception("Falha ao verificar urgencia VIP")
+
     # --- 3. Montar contexto executavel ---
     try:
         contexto = montar_contexto(sessao_id)
