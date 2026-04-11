@@ -252,7 +252,7 @@ _LABEL_POR_MOTIVO: dict[str, str] = {
 
 def escalar_para_humano(
     conv_id: int,
-    team_id: int,
+    team_id: int | None,
     motivo: str,
     prioridade: str,
 ) -> None:
@@ -262,5 +262,6 @@ def escalar_para_humano(
     if label_extra:
         adicionar_label(conv_id, label_extra)
     definir_prioridade(conv_id, prioridade)
-    assignar_time(conv_id, team_id)
+    if team_id:
+        assignar_time(conv_id, team_id)
     nota_privada(conv_id, f"[ESCALACAO] {motivo}. Prioridade: {prioridade}")

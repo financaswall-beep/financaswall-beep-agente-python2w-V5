@@ -641,8 +641,8 @@ def _processar_escalacao(
     except Exception:
         logger.exception("Falha ao atualizar status sessao para escalada")
 
-    # Notificar Chatwoot
-    if chatwoot_conv_id and team_id:
+    # Notificar Chatwoot (labels/prioridade/nota sempre; team so se configurado)
+    if chatwoot_conv_id:
         chatwoot_sync.escalar_para_humano(chatwoot_conv_id, team_id, motivo, prioridade)
 
     logger.info(
