@@ -856,6 +856,10 @@ def processar_turno(
     if sessao_apos_fatos and sessao_apos_fatos.cliente_id:
         _atualizar_nome_cliente(sessao_id, sessao_apos_fatos.cliente_id)
         _atualizar_localidade_cliente(sessao_id, sessao_apos_fatos.cliente_id)
+        if chatwoot_contact_id:
+            _fato_nome = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.NOME_CLIENTE)
+            if _fato_nome and _fato_nome.valor_texto:
+                chatwoot_sync.sincronizar_nome_cliente(chatwoot_contact_id, _fato_nome.valor_texto)
 
     # --- 7c. Cancelamento solicitado via fato ---
     fato_cancel = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.PEDIDO_CANCELAMENTO_SOLICITADO)
@@ -1010,6 +1014,10 @@ def processar_turno(
                     "Auto-promocao em fechamento: pedido #%s (valor=%s)",
                     pedido_criado.numero_pedido, pedido_criado.valor_total,
                 )
+                if chatwoot_conv_id:
+                    chatwoot_sync.sincronizar_pedido_criado(
+                        chatwoot_conv_id, pedido_criado.numero_pedido, pedido_criado.valor_total,
+                    )
                 sessao_atual = sessao_repo.buscar_sessao_por_id(sessao_id)
                 if sessao_atual and sessao_atual.cliente_id:
                     _atualizar_localidade_cliente(sessao_id, sessao_atual.cliente_id)
