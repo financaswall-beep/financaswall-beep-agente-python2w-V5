@@ -195,6 +195,17 @@ def _consultar_e_registrar_frete(sessao_id: UUID) -> None:
                     municipio_anterior = fato_frete.valor_json.get("municipio", municipio)
 
             if municipio_anterior and municipio_anterior.lower() == municipio.lower():
+                # Frete ja calculado, mas salva cache se bairro agora disponivel
+                if bairro:
+                    try:
+                        bairro_municipio_cache_repo.salvar(
+                            termo_original=bairro,
+                            bairro=bairro,
+                            municipio=municipio,
+                            fonte="confirmado_frete",
+                        )
+                    except Exception:
+                        logger.warning("Falha ao salvar cache confirmado para '%s'", bairro)
                 return  # mesmo municipio, frete ja calculado
 
             # Municipio mudou — limpar frete antigo antes de recalcular
