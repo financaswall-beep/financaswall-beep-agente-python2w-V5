@@ -198,6 +198,38 @@ def _normalizar_telefone(raw: str) -> str:
     return digitos
 
 
+# ---------------------------------------------------------------------------
+# Filtro de bots / contas automatizadas
+# ---------------------------------------------------------------------------
+
+# Telefones conhecidos de bots/empresas que enviam mensagens automaticas.
+# Se o bot responder, entra em loop infinito (IA x IA).
+_TELEFONES_BLOQUEADOS: set[str] = {
+    "5511999910621",  # Minha Claro
+}
+
+# Palavras no nome do sender que indicam conta corporativa/bot
+_NOMES_BOT_PATTERNS = re.compile(
+    r"(?:^minha\s|^suporte\s|^atendimento\s|^sac\s|^central\s|"
+    r"noreply|no.reply|autoatendimento|bot\b|chatbot)",
+    re.IGNORECASE,
+)
+
+
+def _eh_bot_ou_empresa(identifier: str, nome: str, telefone: str) -> bool:
+    """Retorna True se o remetente parece ser um bot ou conta corporativa."""
+    # Identifier terminando em @lid = WhatsApp Business API / bot
+    if identifier and identifier.endswith("@lid"):
+        return True
+    # Telefone na blocklist
+    if telefone in _TELEFONES_BLOQUEADOS:
+        return True
+    # Nome bate com padrao de bot
+    if nome and _NOMES_BOT_PATTERNS.search(nome):
+        return True
+    return False
+
+
 def _extrair_telefone_do_identifier(identifier: str) -> str:
     """Extrai telefone do identifier do Baileys.
 
@@ -438,6 +470,16 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     if not telefone:
         telefone = f"chatwoot_{conversation_id}"
         logger.warning("Telefone nao encontrado, usando fallback: %s", telefone)
+
+    # 8b. Filtrar bots / contas automatizadas (evita loop IA × IA)
+    sender_identifier = sender.get("identifier", "") or sender_meta.get("identifier", "")
+    sender_name = sender.get("name", "") or sender_meta.get("name", "")
+    if _eh_bot_ou_empresa(sender_identifier, sender_name, telefone):
+        logger.info(
+            "Webhook ignorado: remetente bot/empresa (name=%s tel=%s identifier=%s)",
+            sender_name, telefone, sender_identifier,
+        )
+        return {"status": "ignored", "reason": "bot_sender"}
 
     # 9. Dedup
     if _mensagem_ja_processada(message_id):
