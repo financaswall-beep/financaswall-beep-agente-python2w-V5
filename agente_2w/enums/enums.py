@@ -23,6 +23,7 @@ class StatusSessao(str, Enum):
     ativa = "ativa"
     aguardando_cliente = "aguardando_cliente"
     bloqueada = "bloqueada"
+    escalada = "escalada"
     fechada = "fechada"
 
 

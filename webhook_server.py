@@ -530,6 +530,18 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                 from agente_2w import chatwoot_sync
                 await asyncio.to_thread(chatwoot_sync.ativar_typing, conversation_id)
 
+                # Guard de escalacao: se conversa esta escalada para humano, bot silencia
+                from agente_2w.db import escalacao_repo
+                esc_ativa = await asyncio.to_thread(
+                    escalacao_repo.buscar_escalacao_ativa_por_conv, conversation_id,
+                )
+                if esc_ativa:
+                    logger.info(
+                        "Bot silenciado: conv=%s escalacao=%s (humano atendendo)",
+                        conversation_id, esc_ativa.id,
+                    )
+                    return
+
                 resposta = await asyncio.to_thread(
                     processar_turno,
                     sessao.id,
@@ -638,3 +650,74 @@ async def auto_resolve(request: Request):
     n = await _auto_resolver_conversas(horas=horas)
     logger.info("auto-resolve manual: %d conversa(s) resolvida(s) (horas=%d)", n, horas)
     return {"status": "ok", "resolvidas": n, "horas": horas}
+
+
+# ---------------------------------------------------------------------------
+# Endpoints de escalacao — controle de handoff humano
+# ---------------------------------------------------------------------------
+
+@app.post("/internal/devolver-ao-bot")
+async def devolver_ao_bot(request: Request):
+    """Devolve conversa escalada de volta para o bot.
+
+    Body: {"escalacao_id": "uuid", "notas": "..."}
+    """
+    from agente_2w.db import escalacao_repo
+
+    body = await request.json()
+    escalacao_id = body.get("escalacao_id")
+    notas = body.get("notas")
+
+    if not escalacao_id:
+        raise HTTPException(status_code=400, detail="escalacao_id obrigatorio")
+
+    try:
+        from uuid import UUID
+        esc = await asyncio.to_thread(
+            escalacao_repo.resolver_escalacao,
+            UUID(escalacao_id), "devolvida_bot", notas,
+        )
+        # Reativar sessao
+        await asyncio.to_thread(
+            sessao_repo.atualizar_status,
+            esc.sessao_chat_id, StatusSessao.ativa,
+        )
+        logger.info("Escalacao %s devolvida ao bot (sessao=%s)", escalacao_id, esc.sessao_chat_id)
+        return {"status": "ok", "sessao_id": str(esc.sessao_chat_id)}
+    except Exception as e:
+        logger.exception("Erro ao devolver ao bot: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/internal/resolver-escalacao")
+async def resolver_escalacao_endpoint(request: Request):
+    """Resolve e encerra uma escalacao (humano resolveu o caso).
+
+    Body: {"escalacao_id": "uuid", "notas": "..."}
+    """
+    from agente_2w.db import escalacao_repo
+    from agente_2w import chatwoot_sync
+
+    body = await request.json()
+    escalacao_id = body.get("escalacao_id")
+    notas = body.get("notas")
+
+    if not escalacao_id:
+        raise HTTPException(status_code=400, detail="escalacao_id obrigatorio")
+
+    try:
+        from uuid import UUID
+        esc = await asyncio.to_thread(
+            escalacao_repo.resolver_escalacao,
+            UUID(escalacao_id), "resolvida", notas,
+        )
+        # Fechar sessao
+        await asyncio.to_thread(sessao_repo.fechar_sessao, esc.sessao_chat_id)
+        # Resolver conversa no Chatwoot
+        if esc.chatwoot_conv_id:
+            await asyncio.to_thread(chatwoot_sync.resolver_conversa, esc.chatwoot_conv_id)
+        logger.info("Escalacao %s resolvida (sessao=%s fechada)", escalacao_id, esc.sessao_chat_id)
+        return {"status": "ok", "sessao_id": str(esc.sessao_chat_id)}
+    except Exception as e:
+        logger.exception("Erro ao resolver escalacao: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))

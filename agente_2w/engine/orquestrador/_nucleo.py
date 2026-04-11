@@ -11,6 +11,7 @@ from agente_2w.db import (
     contexto_repo,
     item_provisorio_repo,
     cliente_repo,
+    escalacao_repo,
 )
 from agente_2w.engine.sessao_timeout import (
     avaliar_sessao,
@@ -81,6 +82,10 @@ def _resolver_timeout(sessao) -> UUID:
     para nao interromper o atendimento.
     """
     try:
+        # Sessao escalada nao expira — humano ainda pode estar atendendo
+        if sessao.status_sessao == StatusSessao.escalada:
+            return sessao.id
+
         # Verificar se sessao tem pedido (necessario para timeout pos-pedido)
         from agente_2w.db import pedido_repo
         tem_pedido = pedido_repo.buscar_pedido_por_sessao(sessao.id) is not None
@@ -572,6 +577,80 @@ from agente_2w.engine.orquestrador.localidade_frete import (  # noqa: E402
 from agente_2w.engine.orquestrador.guardrails import _aplicar_guardrail  # noqa: E402
 
 
+def _processar_escalacao(
+    sessao_id: UUID,
+    chatwoot_conv_id: int | None,
+    motivo: str,
+    origem: str,
+) -> None:
+    """Centraliza logica de escalacao para atendimento humano.
+
+    1. Checa idempotencia (ja tem escalacao ativa?)
+    2. Busca cliente para classificar prioridade
+    3. INSERT na tabela escalacao
+    4. Atualiza status da sessao para 'escalada'
+    5. Notifica Chatwoot (label, prioridade, team, nota)
+    """
+    from agente_2w.config import CHATWOOT_TEAM_VENDAS_ID
+    from agente_2w.schemas.escalacao import EscalacaoCreate
+
+    # Idempotencia: ja tem escalacao ativa?
+    existente = escalacao_repo.buscar_escalacao_ativa(sessao_id)
+    if existente:
+        logger.info("Escalacao ja ativa para sessao %s — ignorando duplicata", sessao_id)
+        return
+
+    # Buscar dados do cliente para classificar prioridade
+    sessao = sessao_repo.buscar_sessao_por_id(sessao_id)
+    cliente_segmento = None
+    cliente_total_pedidos = 0
+    valor_pedido = None
+    if sessao and sessao.cliente_id:
+        try:
+            cliente = cliente_repo.buscar_cliente_por_id(sessao.cliente_id)
+            if cliente:
+                cliente_segmento = cliente.segmento
+                cliente_total_pedidos = cliente.total_pedidos or 0
+        except Exception:
+            pass
+        try:
+            from agente_2w.db import pedido_repo
+            pedido = pedido_repo.buscar_pedido_por_sessao(sessao_id)
+            if pedido:
+                valor_pedido = pedido.valor_total
+        except Exception:
+            pass
+
+    prioridade = escalacao_repo.classificar_prioridade(
+        motivo, cliente_segmento, cliente_total_pedidos, valor_pedido
+    )
+
+    # Criar registro de escalacao
+    team_id = CHATWOOT_TEAM_VENDAS_ID if CHATWOOT_TEAM_VENDAS_ID else None
+    escalacao = escalacao_repo.criar_escalacao(EscalacaoCreate(
+        sessao_chat_id=sessao_id,
+        chatwoot_conv_id=chatwoot_conv_id or 0,
+        motivo=motivo,
+        origem=origem,
+        chatwoot_team_id=team_id,
+    ))
+
+    # Atualizar status da sessao
+    try:
+        sessao_repo.atualizar_status(sessao_id, StatusSessao.escalada)
+    except Exception:
+        logger.exception("Falha ao atualizar status sessao para escalada")
+
+    # Notificar Chatwoot
+    if chatwoot_conv_id and team_id:
+        chatwoot_sync.escalar_para_humano(chatwoot_conv_id, team_id, motivo, prioridade)
+
+    logger.info(
+        "Escalacao criada: sessao=%s motivo=%s prioridade=%s origem=%s",
+        sessao_id, motivo, prioridade, origem,
+    )
+
+
 def _despachar_acoes(sessao_id: UUID, acoes: list[str]):
     """Despacha acoes que requerem execucao backend.
 
@@ -887,6 +966,33 @@ def processar_turno(
                     numero_pedido=_pedido.numero_pedido if _pedido else None,
                 )
                 chatwoot_sync.resolver_conversa(chatwoot_conv_id)
+
+    # --- 7d. Escalacao via fatos (IA emitiu escalar_para_humano, cliente_atacado, emergencia_pneu) ---
+    _FATOS_ESCALACAO = [
+        (ChaveContexto.ESCALAR_PARA_HUMANO, "cliente_pediu_humano"),
+        (ChaveContexto.CLIENTE_ATACADO, "cliente_atacado"),
+        (ChaveContexto.EMERGENCIA_PNEU, "emergencia_pneu"),
+    ]
+    for _chave_esc, _motivo_esc in _FATOS_ESCALACAO:
+        _fato_esc = contexto_repo.buscar_fato_ativo(sessao_id, _chave_esc)
+        if _fato_esc:
+            try:
+                contexto_repo.desativar_fato_anterior(sessao_id, _chave_esc)
+            except Exception:
+                logger.exception("Falha ao desativar fato escalacao '%s'", _chave_esc)
+            _processar_escalacao(sessao_id, chatwoot_conv_id, _motivo_esc, "ia")
+            # Retornar resposta da IA (mensagem de despedida/transicao)
+            _persistir_saida(sessao_id, envelope.mensagem_cliente)
+            return RespostaTurno(texto=envelope.mensagem_cliente)
+
+    # --- 7e. Escalacao codigo: frete_nao_coberto ---
+    _fato_frete_nc = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.FRETE_NAO_COBERTO)
+    _fato_tipo_entrega = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.TIPO_ENTREGA)
+    _eh_retirada = _fato_tipo_entrega and _fato_tipo_entrega.valor_texto == "retirada"
+    if _fato_frete_nc and not _eh_retirada:
+        _esc_existente = escalacao_repo.buscar_escalacao_ativa(sessao_id)
+        if not _esc_existente:
+            _processar_escalacao(sessao_id, chatwoot_conv_id, "frete_nao_coberto", "codigo")
 
     # --- 8. Aplicar mudancas de contexto ---
     _aplicar_mudancas_contexto(sessao_id, envelope.mudancas_contexto)

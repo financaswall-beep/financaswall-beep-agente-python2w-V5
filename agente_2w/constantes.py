@@ -34,3 +34,8 @@ class ChaveContexto:
     ITENS_FINALIZADOS = "itens_finalizados"
     PEDIDO_CANCELAMENTO_SOLICITADO = "pedido_cancelamento_solicitado"
     ERRO_PROMOCAO = "erro_promocao"  # erros de pre-condicao ao tentar criar pedido
+
+    # ─── Escalacao para atendimento humano ────────────────────────────────────
+    ESCALAR_PARA_HUMANO = "escalar_para_humano"
+    CLIENTE_ATACADO = "cliente_atacado"
+    EMERGENCIA_PNEU = "emergencia_pneu"

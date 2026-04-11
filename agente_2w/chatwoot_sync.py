@@ -214,3 +214,53 @@ def sincronizar_cancelamento(conv_id: int, numero_pedido: int | str | None = Non
     adicionar_label(conv_id, "pedido_cancelado")
     texto = f"Pedido #{numero_pedido} cancelado pelo cliente" if numero_pedido else "Pedido cancelado pelo cliente"
     nota_privada(conv_id, texto)
+
+
+def definir_prioridade(conv_id: int, prioridade: str) -> None:
+    """Define a prioridade da conversa no Chatwoot (urgent, high, medium, low)."""
+    if not _habilitado() or not conv_id:
+        return
+    try:
+        url = f"{_base()}/conversations/{conv_id}"
+        resp = _client().patch(url, json={"priority": prioridade}, headers=_headers())
+        resp.raise_for_status()
+        logger.info("Prioridade '%s' definida na conv %d", prioridade, conv_id)
+    except Exception:
+        logger.warning("Falha ao definir prioridade na conv %d", conv_id, exc_info=True)
+
+
+def assignar_time(conv_id: int, team_id: int) -> None:
+    """Atribui a conversa a um time no Chatwoot."""
+    if not _habilitado() or not conv_id or not team_id:
+        return
+    try:
+        url = f"{_base()}/conversations/{conv_id}/assignments"
+        resp = _client().post(url, json={"team_id": team_id}, headers=_headers())
+        resp.raise_for_status()
+        logger.info("Time %d assignado na conv %d", team_id, conv_id)
+    except Exception:
+        logger.warning("Falha ao assignar time na conv %d", conv_id, exc_info=True)
+
+
+# Mapeamento motivo -> label extra
+_LABEL_POR_MOTIVO: dict[str, str] = {
+    "cliente_atacado": "emergencia",
+    "emergencia_pneu": "emergencia",
+    "frete_nao_coberto": "fora_de_area",
+}
+
+
+def escalar_para_humano(
+    conv_id: int,
+    team_id: int,
+    motivo: str,
+    prioridade: str,
+) -> None:
+    """Escala conversa para atendimento humano — composta, cada etapa fail-safe."""
+    adicionar_label(conv_id, "escalado_vendas")
+    label_extra = _LABEL_POR_MOTIVO.get(motivo)
+    if label_extra:
+        adicionar_label(conv_id, label_extra)
+    definir_prioridade(conv_id, prioridade)
+    assignar_time(conv_id, team_id)
+    nota_privada(conv_id, f"[ESCALACAO] {motivo}. Prioridade: {prioridade}")
