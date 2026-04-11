@@ -526,6 +526,10 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                         sessao.id, conversation_id, chatwoot_contact_id,
                     )
 
+                # Typing indicator — mostra "digitando..." enquanto IA processa
+                from agente_2w import chatwoot_sync
+                await asyncio.to_thread(chatwoot_sync.ativar_typing, conversation_id)
+
                 resposta = await asyncio.to_thread(
                     processar_turno,
                     sessao.id,

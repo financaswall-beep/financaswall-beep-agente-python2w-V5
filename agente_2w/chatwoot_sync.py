@@ -124,6 +124,17 @@ def resolver_conversa(conv_id: int) -> None:
         logger.warning("Falha ao resolver conversa %d", conv_id, exc_info=True)
 
 
+def ativar_typing(conv_id: int) -> None:
+    """Ativa indicador 'digitando...' na conversa."""
+    if not _habilitado() or not conv_id:
+        return
+    try:
+        url = f"{_base()}/conversations/{conv_id}/toggle_typing_status"
+        _client().post(url, json={"typing_status": "on"}, headers=_headers())
+    except Exception:
+        pass  # silencioso — UX only, nao pode travar o fluxo
+
+
 def sincronizar_etapa(conv_id: int, etapa: str) -> None:
     """Adiciona a label correspondente a etapa atual do fluxo de vendas."""
     label = _LABEL_POR_ETAPA.get(etapa)
