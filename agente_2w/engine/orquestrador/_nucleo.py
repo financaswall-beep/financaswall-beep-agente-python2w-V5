@@ -199,6 +199,14 @@ def _chamar_e_validar(contexto, mensagem_texto: str, imagens: list[str] | None =
             erros_anteriores = [e.mensagem]
             continue
 
+        # Auto-corrector: corrige envelope ANTES de validar (evita retries)
+        if erros_validacao:
+            from agente_2w.engine.orquestrador.auto_corrector import auto_corrigir_envelope
+            if auto_corrigir_envelope(envelope, contexto.sessao.etapa_atual):
+                # Re-validar após correção
+                from agente_2w.engine.validador_envelope import validar_envelope as _revalidar
+                erros_validacao = _revalidar(envelope, contexto)
+
         if not erros_validacao:
             return envelope, todos_pneus
 
