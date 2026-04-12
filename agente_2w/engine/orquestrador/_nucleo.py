@@ -1071,6 +1071,60 @@ def processar_turno(
                     except Exception:
                         logger.exception("Rede de seguranca 9b falhou")
 
+    # --- 9c. Rede de seguranca: entrega/frete registrado sem item criado ---
+    # Quando o cliente confirma o pneu E pergunta sobre entrega na mesma mensagem
+    # (ex: "Sim vcs entregam no anaia?"), a IA registra fatos de entrega/frete
+    # mas esquece de emitir mudancas_itens:criar. O item nunca e criado.
+    # Detecta: fatos de entrega apareceram NESTE turno + zero itens + 1 pneu nos resultados.
+    _CHAVES_ENTREGA = {ChaveContexto.TIPO_ENTREGA, ChaveContexto.MUNICIPIO, ChaveContexto.FRETE_VALOR}
+    _entrega_registrada_agora = bool(_CHAVES_ENTREGA - _chaves_antes) and any(
+        contexto_repo.buscar_fato_ativo(sessao_id, ch) is not None
+        for ch in (_CHAVES_ENTREGA - _chaves_antes)
+    )
+    if _entrega_registrada_agora:
+        _tem_criar_neste_turno = any(
+            getattr(m, "acao", None) == "criar"
+            for m in envelope.mudancas_itens
+        )
+        if not _tem_criar_neste_turno:
+            _itens_9c = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
+            _itens_com_pneu_9c = [i for i in _itens_9c if i.pneu_id]
+            if not _itens_com_pneu_9c and pneus_encontrados:
+                # Filtrar pneus unicos
+                _vistos_9c: set = set()
+                _unicos_9c = []
+                for p in pneus_encontrados:
+                    pid = p.get("pneu_id")
+                    if pid and pid not in _vistos_9c:
+                        _vistos_9c.add(pid)
+                        _unicos_9c.append(p)
+                # So auto-criar se exatamente 1 pneu (sem ambiguidade)
+                if len(_unicos_9c) == 1:
+                    _fato_recusa_9c = contexto_repo.buscar_fato_ativo(
+                        sessao_id, ChaveContexto.CLIENTE_RECUSOU_OPCAO_ATUAL
+                    )
+                    if not _fato_recusa_9c:
+                        _p9c = _unicos_9c[0]
+                        try:
+                            _pneu_uuid_9c = UUID(str(_p9c["pneu_id"]))
+                            _preco_9c = float(_p9c["preco_venda"]) if _p9c.get("preco_venda") else None
+                            _posicao_9c = _p9c.get("posicao")
+                            item_provisorio_repo.criar_item(ItemProvisorioCreate(
+                                sessao_chat_id=sessao_id,
+                                status_item=StatusItemProvisorio.selecionado_cliente,
+                                pneu_id=_pneu_uuid_9c,
+                                posicao=_posicao_9c,
+                                quantidade=1,
+                                preco_unitario_sugerido=_preco_9c,
+                            ))
+                            logger.info(
+                                "Rede de seguranca 9c: item criado automaticamente pneu_id=%s "
+                                "(entrega/frete registrado neste turno sem item)",
+                                _pneu_uuid_9c,
+                            )
+                        except Exception:
+                            logger.exception("Rede de seguranca 9c falhou")
+
     # --- 10. Despachar acoes sugeridas ---
     pedido_criado = _despachar_acoes(sessao_id, envelope.acoes_sugeridas)
     if chatwoot_conv_id and pedido_criado:

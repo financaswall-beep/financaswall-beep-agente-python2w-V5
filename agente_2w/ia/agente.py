@@ -11,7 +11,7 @@ from agente_2w.config import OPENAI_API_KEY, OPENAI_MODEL, MAX_TOOL_ROUNDS
 logger = logging.getLogger(__name__)
 
 OPENAI_TIMEOUT = 30  # segundos
-from agente_2w.ia.prompt_sistema import SYSTEM_PROMPT
+from agente_2w.ia.prompt_sistema import construir_prompt
 from agente_2w.schemas.contexto_executavel import ContextoExecutavel
 from agente_2w.tools.busca_catalogo import (
     buscar_pneus,
@@ -111,8 +111,15 @@ def chamar_agente(
     else:
         user_content = mensagem_usuario
 
+    # Prompt dinâmico: inclui só regras da etapa atual + adjacentes
+    etapa_atual = contexto.sessao.etapa_atual
+    if hasattr(etapa_atual, "value"):
+        etapa_atual = etapa_atual.value
+    prompt_sistema = construir_prompt(etapa_atual or "identificacao")
+    logger.info("[V3] prompt_dinamico etapa=%s chars=%d", etapa_atual, len(prompt_sistema))
+
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": prompt_sistema},
         {
             "role": "system",
             "content": f"CONTEXTO ATUAL DA SESSÃO (JSON):\n{contexto_json}",
