@@ -1251,6 +1251,35 @@ def processar_turno(
         )
         chatwoot_sync.sincronizar_etapa(chatwoot_conv_id, _etapa_efetiva.value)
 
+    # --- 11b. Detector de loop: mesma etapa repetida com cliente confirmando ---
+    try:
+        from agente_2w.engine.orquestrador.detector_loop import detectar_loop
+        _etapa_pos = envelope.etapa_atual
+        _acao_loop = detectar_loop(
+            sessao_id, contexto.sessao.etapa_atual, _etapa_pos, mensagem_texto,
+        )
+        if _acao_loop == "forcar_transicao":
+            # Forcar avanco: busca→oferta ou oferta→confirmacao_item
+            _destinos = {
+                EtapaFluxo.busca: EtapaFluxo.oferta,
+                EtapaFluxo.oferta: EtapaFluxo.confirmacao_item,
+            }
+            _destino = _destinos.get(_etapa_pos)
+            if _destino:
+                sessao_repo.atualizar_etapa(sessao_id, _destino)
+                logger.warning(
+                    "Detector de loop: forcando transicao %s -> %s",
+                    _etapa_pos.value, _destino.value,
+                )
+        elif _acao_loop == "escalar":
+            _processar_escalacao(
+                sessao_id, chatwoot_conv_id,
+                "loop_detectado", "codigo",
+            )
+            logger.warning("Detector de loop: escalando sessao %s", sessao_id)
+    except Exception:
+        logger.exception("Falha no detector de loop")
+
     # --- 12. Auto-promover em fechamento se pre-condicoes ok ---
     # Se a etapa resultante e fechamento e o promotor nao foi chamado
     # via acoes_sugeridas, verificar se podemos promover automaticamente.
