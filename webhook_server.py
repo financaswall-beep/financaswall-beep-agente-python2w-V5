@@ -396,6 +396,102 @@ async def health():
         raise HTTPException(status_code=503, detail="Supabase indisponivel")
 
 
+# ---------------------------------------------------------------------------
+# Handler de logistica via labels do Chatwoot
+# ---------------------------------------------------------------------------
+_LABELS_LOGISTICA = {"separando", "em_transito", "entregue", "nao_efetuada"}
+
+# Transições válidas: status_atual -> {status_destino, ...}
+_TRANSICOES_LOGISTICA: dict[str, set[str]] = {
+    "confirmado": {"separando", "entregue"},
+    "separando": {"em_transito", "entregue", "nao_efetuada"},
+    "em_transito": {"entregue", "nao_efetuada"},
+}
+
+# Pedidos já processados (idempotência em memória)
+_logistica_processado: set[str] = set()
+
+
+def _processar_label_logistica(data: dict) -> dict:
+    """Processa labels de logística em conversation_updated."""
+    conversation = data.get("conversation") or data.get("data", {}).get("conversation", {})
+    if not conversation:
+        return {"status": "ignored", "reason": "no_conversation"}
+
+    conv_id = conversation.get("id")
+    labels: list[str] = conversation.get("labels", [])
+
+    # Verifica se alguma label de logística foi aplicada
+    labels_logistica = [l for l in labels if l in _LABELS_LOGISTICA]
+    if not labels_logistica:
+        return {"status": "ignored", "reason": "no_logistica_label"}
+
+    # Pega o status mais avançado se houver múltiplas
+    _ORDEM = ["separando", "em_transito", "entregue", "nao_efetuada"]
+    novo_status = max(labels_logistica, key=lambda l: _ORDEM.index(l) if l in _ORDEM else -1)
+
+    # Idempotência
+    chave = f"{conv_id}:{novo_status}"
+    if chave in _logistica_processado:
+        logger.info("Logistica: conv=%s status=%s ja processado (idempotente)", conv_id, novo_status)
+        return {"status": "ok", "logistica": "already_processed"}
+
+    # Buscar pedido pela conversa
+    from agente_2w.db import pedido_repo, catalogo_repo
+
+    pedido = pedido_repo.buscar_pedido_por_chatwoot_conv(conv_id)
+    if not pedido:
+        logger.warning("Logistica: nenhum pedido para conv=%s", conv_id)
+        return {"status": "error", "reason": "no_pedido_for_conversation"}
+
+    # Validar transição
+    status_atual = pedido.status_pedido.value
+    permitidos = _TRANSICOES_LOGISTICA.get(status_atual, set())
+    if novo_status not in permitidos:
+        logger.warning(
+            "Logistica: transicao %s -> %s nao permitida (conv=%s pedido=%s)",
+            status_atual, novo_status, conv_id, pedido.numero_pedido,
+        )
+        return {
+            "status": "error",
+            "reason": f"transicao {status_atual} -> {novo_status} nao permitida",
+            "permitidos": sorted(permitidos),
+        }
+
+    # Atualizar status
+    pedido_repo.atualizar_status_pedido(pedido.id, novo_status)
+    logger.info("Logistica: pedido #%s -> %s (conv=%s)", pedido.numero_pedido, novo_status, conv_id)
+
+    # Ações no estoque por status
+    if novo_status == "entregue":
+        # Baixa física: disponivel -= qty, reservado -= qty
+        itens = pedido_repo.listar_itens_pedido(pedido.id)
+        for item in itens:
+            catalogo_repo.baixar_estoque_fisico(item.pneu_id, item.quantidade)
+        logger.info("Logistica: baixa fisica de %d itens do pedido #%s", len(itens), pedido.numero_pedido)
+
+    elif novo_status == "nao_efetuada":
+        # Libera reserva (pneu volta ao disponível), estoque físico intacto
+        itens = pedido_repo.listar_itens_pedido(pedido.id)
+        for item in itens:
+            catalogo_repo.decrementar_reservado(item.pneu_id, item.quantidade)
+        logger.info("Logistica: reserva liberada de %d itens do pedido #%s", len(itens), pedido.numero_pedido)
+
+    # Nota privada no Chatwoot
+    from agente_2w import chatwoot_sync
+    _STATUS_LABEL = {
+        "separando": "📦 Pedido em separação",
+        "em_transito": "🚚 Pedido em trânsito",
+        "entregue": "✅ Pedido entregue — estoque baixado",
+        "nao_efetuada": "⚠️ Entrega não efetuada — reserva liberada",
+    }
+    chatwoot_sync.nota_privada(conv_id, f"[LOGISTICA] {_STATUS_LABEL.get(novo_status, novo_status)}")
+
+    _logistica_processado.add(chave)
+
+    return {"status": "ok", "logistica": novo_status, "pedido": pedido.numero_pedido}
+
+
 @app.get("/version")
 async def version():
     """Retorna versao do codigo deployado."""
@@ -416,8 +512,13 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
 
     data = await request.json()
 
-    # 2. Filtrar: processar eventos de mensagem recebida do Chatwoot
+    # 2. Filtrar eventos
     event = data.get("event")
+
+    # --- Handler de logistica via labels do Chatwoot ---
+    if event == "conversation_updated":
+        return _processar_label_logistica(data)
+
     if event not in {"message_created", "message_incoming"}:
         logger.info("Webhook ignorado: event=%s", event)
         return {"status": "ignored", "event": event}

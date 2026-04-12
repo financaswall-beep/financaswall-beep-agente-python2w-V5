@@ -199,3 +199,25 @@ def decrementar_reservado(pneu_id: UUID, quantidade: int) -> None:
         logger.debug("Reservado -%d para pneu %s", quantidade, pneu_id)
     except Exception:
         logger.exception("Falha ao decrementar reservado pneu %s", pneu_id)
+
+
+def baixar_estoque_fisico(pneu_id: UUID, quantidade: int) -> None:
+    """Baixa estoque fisico apos entrega: disponivel -= qty E reservado -= qty."""
+    try:
+        estoque = buscar_estoque_por_pneu(pneu_id)
+        if not estoque:
+            logger.warning("Nenhum registro de estoque para pneu %s", pneu_id)
+            return
+        novo_disponivel = max(0, estoque.quantidade_disponivel - quantidade)
+        novo_reservado = max(0, estoque.reservado - quantidade)
+        supabase.table("estoque").update({
+            "quantidade_disponivel": novo_disponivel,
+            "reservado": novo_reservado,
+        }).eq("pneu_id", str(pneu_id)).execute()
+        logger.info(
+            "Baixa fisica pneu %s: disponivel=%d->%d, reservado=%d->%d",
+            pneu_id, estoque.quantidade_disponivel, novo_disponivel,
+            estoque.reservado, novo_reservado,
+        )
+    except Exception:
+        logger.exception("Falha ao baixar estoque fisico pneu %s", pneu_id)
