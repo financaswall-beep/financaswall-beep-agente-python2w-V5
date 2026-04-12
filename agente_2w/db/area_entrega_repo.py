@@ -31,13 +31,12 @@ def consultar_frete(municipio: str) -> Decimal | None:
         return None
 
     try:
-        municipio_norm = _normalizar(municipio)
         resultado = (
             supabase.table(_TABELA)
             .select("municipio, valor_frete")
             .eq("ativo", True)
             .is_("bairro", "null")
-            .ilike("municipio", municipio_norm)
+            .ilike("municipio", municipio)
             .limit(1)
             .execute()
         )
