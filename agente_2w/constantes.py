@@ -26,6 +26,7 @@ class ChaveContexto:
     FRETE_VALOR = "frete_valor"
     FRETE_NAO_COBERTO = "frete_nao_coberto"
     MUNICIPIO_AMBIGUO = "municipio_ambiguo"  # localidade existe em 2+ municípios cobertos
+    LOCALIDADE_NAO_RESOLVIDA = "localidade_nao_resolvida"  # bairro sem município — IA deve perguntar
 
     # ─── Flags de fluxo / estado da busca ─────────────────────────────────────
     ULTIMOS_PNEUS_ENCONTRADOS = "ultimos_pneus_encontrados"
