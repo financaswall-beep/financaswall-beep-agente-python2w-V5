@@ -62,25 +62,47 @@ def salvar(
     municipio: str | None,
     fonte: str = "web_search",
 ) -> None:
-    """Salva (ou atualiza) entrada no cache.
+    """Salva ou atualiza entrada no cache. NUNCA reseta o contador de acessos.
 
-    municipio=None indica área fora de cobertura — também é salvo para
-    evitar nova chamada ao web_search para o mesmo termo.
+    - Entrada nova → insere com acessos=1
+    - Entrada existente → atualiza bairro/municipio/fonte, preserva acessos
     """
     if not termo_original:
         return
 
     chave = _normalizar(termo_original)
+    agora = datetime.now(timezone.utc).isoformat()
+
     try:
-        supabase.table(_TABELA).upsert({
-            "termo_normalizado": chave,
-            "termo_original": termo_original,
-            "bairro": bairro,
-            "municipio": municipio,
-            "fonte": fonte,
-            "acessos": 1,
-            "atualizado_em": datetime.now(timezone.utc).isoformat(),
-        }, on_conflict="termo_normalizado").execute()
+        # Verifica se já existe
+        res = (
+            supabase.table(_TABELA)
+            .select("termo_normalizado")
+            .eq("termo_normalizado", chave)
+            .limit(1)
+            .execute()
+        )
+
+        if res.data:
+            # Já existe: atualiza dados mas NÃO toca em acessos
+            supabase.table(_TABELA).update({
+                "bairro": bairro,
+                "municipio": municipio,
+                "fonte": fonte,
+                "atualizado_em": agora,
+            }).eq("termo_normalizado", chave).execute()
+        else:
+            # Nova entrada: insere com acessos=1
+            supabase.table(_TABELA).insert({
+                "termo_normalizado": chave,
+                "termo_original": termo_original,
+                "bairro": bairro,
+                "municipio": municipio,
+                "fonte": fonte,
+                "acessos": 1,
+                "atualizado_em": agora,
+            }).execute()
+
         logger.info(
             "Cache salvo: '%s' → bairro=%s, municipio=%s [%s]",
             termo_original, bairro, municipio, fonte,
