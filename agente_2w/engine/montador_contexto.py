@@ -296,6 +296,16 @@ def montar_contexto(sessao_id: UUID) -> ContextoExecutavel:
                 "e sugira alternativas (outro pneu, aguardar reposicao, etc)."
             )
 
+    # Alerta critico: localidade nao resolvida — bairro sem municipio identificado
+    if ChaveContexto.LOCALIDADE_NAO_RESOLVIDA in chaves_ativas:
+        fato_loc = next((f for f in fatos_db if f.chave == ChaveContexto.LOCALIDADE_NAO_RESOLVIDA), None)
+        if fato_loc:
+            alertas.append(
+                f"LOCALIDADE NAO RESOLVIDA: o cliente mencionou '{fato_loc.valor_texto}' mas nao conseguimos "
+                "identificar o municipio. Pergunte ao cliente: 'Em qual cidade/municipio voce mora?' ou "
+                "'Pode me informar seu CEP?' para calcular o frete corretamente."
+            )
+
     # Alerta critico: pedido ja criado nesta sessao
     if pedido_sessao_ctx:
         alertas.append(

@@ -1,12 +1,16 @@
 """Repositório de cache bairro→município.
 
-Evita chamadas repetidas ao web_search para o mesmo termo digitado pelo cliente.
-A chave do cache é o termo normalizado (lowercase, sem acentos) — assim
-"Bangu", "bangu" e "BANGU" viram a mesma entrada.
+Redesign 12/04/2026:
+- PK agora é UUID (id), não mais termo_normalizado
+- Um bairro pode existir em múltiplos municípios (ex: Centro → RJ, Niterói)
+- buscar() retorna lista de resultados (1=único, 2+=ambíguo, 0=miss)
+- Acessos contados a cada consulta (BI)
+- sessao_id indica qual atendimento descobriu o bairro
 """
 import logging
 import unicodedata
 from datetime import datetime, timezone
+from uuid import UUID
 
 from agente_2w.db.client import supabase
 
@@ -22,86 +26,84 @@ def _normalizar(texto: str) -> str:
     return sem_acento.strip().lower()
 
 
-def buscar(termo: str) -> dict | None:
+def buscar(termo: str) -> list[dict]:
     """Busca no cache pelo termo normalizado.
 
-    Retorna dict com chaves 'bairro' e 'municipio', ou None se não houver entrada.
-    municipio=None no dict significa área fora de cobertura (também cacheado).
+    Retorna lista de dicts com chaves 'bairro' e 'municipio':
+    - [] (vazio)     → cache miss
+    - [1 item]       → bairro único, municipio pode ser None (fora de cobertura)
+    - [2+ itens]     → bairro ambíguo (existe em múltiplos municípios)
+
+    Incrementa acessos em todas as linhas encontradas.
     """
     if not termo:
-        return None
+        return []
 
     chave = _normalizar(termo)
     try:
         res = (
             supabase.table(_TABELA)
-            .select("bairro, municipio, acessos")
+            .select("id, bairro, municipio, acessos")
             .eq("termo_normalizado", chave)
-            .limit(1)
             .execute()
         )
-        if res.data:
-            # Incrementa contador de acessos (fire-and-forget)
+        if not res.data:
+            return []
+
+        # Incrementa acessos (fire-and-forget para cada linha)
+        agora = datetime.now(timezone.utc).isoformat()
+        for row in res.data:
             try:
                 supabase.table(_TABELA).update(
-                    {"acessos": res.data[0].get("acessos", 1) + 1,
-                     "atualizado_em": datetime.now(timezone.utc).isoformat()}
-                ).eq("termo_normalizado", chave).execute()
+                    {"acessos": (row.get("acessos") or 0) + 1,
+                     "atualizado_em": agora}
+                ).eq("id", row["id"]).execute()
             except Exception:
                 pass  # não quebra o fluxo principal
-            return {"bairro": res.data[0]["bairro"], "municipio": res.data[0]["municipio"]}
-        return None
+
+        return [{"bairro": r["bairro"], "municipio": r["municipio"]} for r in res.data]
+
     except Exception:
         logger.exception("Erro ao buscar cache para termo '%s'", termo)
-        return None
+        return []
 
 
 def salvar(
     termo_original: str,
     bairro: str | None,
     municipio: str | None,
-    fonte: str = "web_search",
+    fonte: str = "informado_cliente",
+    sessao_id: UUID | None = None,
 ) -> None:
-    """Salva ou atualiza entrada no cache. NUNCA reseta o contador de acessos.
+    """Salva (ou atualiza) entrada no cache.
 
-    - Entrada nova → insere com acessos=1
-    - Entrada existente → atualiza bairro/municipio/fonte, preserva acessos
+    municipio=None indica área fora de cobertura — também é salvo para
+    evitar nova consulta para o mesmo termo.
+
+    Usa UPSERT no unique index (termo_normalizado, municipio) para evitar
+    duplicatas. Se o par (termo, municipio) já existe, atualiza acessos.
     """
     if not termo_original:
         return
 
     chave = _normalizar(termo_original)
-    agora = datetime.now(timezone.utc).isoformat()
-
     try:
-        # Verifica se já existe
-        res = (
-            supabase.table(_TABELA)
-            .select("termo_normalizado")
-            .eq("termo_normalizado", chave)
-            .limit(1)
-            .execute()
-        )
+        payload = {
+            "termo_normalizado": chave,
+            "termo_original": termo_original,
+            "bairro": bairro,
+            "municipio": municipio,
+            "fonte": fonte,
+            "acessos": 1,
+            "atualizado_em": datetime.now(timezone.utc).isoformat(),
+        }
+        if sessao_id:
+            payload["sessao_id"] = str(sessao_id)
 
-        if res.data:
-            # Já existe: atualiza dados mas NÃO toca em acessos
-            supabase.table(_TABELA).update({
-                "bairro": bairro,
-                "municipio": municipio,
-                "fonte": fonte,
-                "atualizado_em": agora,
-            }).eq("termo_normalizado", chave).execute()
-        else:
-            # Nova entrada: insere com acessos=1
-            supabase.table(_TABELA).insert({
-                "termo_normalizado": chave,
-                "termo_original": termo_original,
-                "bairro": bairro,
-                "municipio": municipio,
-                "fonte": fonte,
-                "acessos": 1,
-                "atualizado_em": agora,
-            }).execute()
+        supabase.table(_TABELA).upsert(
+            payload,
+            on_conflict="termo_normalizado,municipio",
+        ).execute()
 
         logger.info(
             "Cache salvo: '%s' → bairro=%s, municipio=%s [%s]",

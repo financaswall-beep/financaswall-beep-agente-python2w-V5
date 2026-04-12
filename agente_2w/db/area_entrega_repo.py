@@ -1,4 +1,7 @@
-"""Repositorio de areas de entrega e fretes."""
+"""Repositorio de areas de entrega e fretes.
+
+Redesign 12/04/2026 — query SQL filtrada por municipio em vez de SELECT *
+"""
 
 import logging
 import unicodedata
@@ -18,59 +21,34 @@ def _normalizar(texto: str) -> str:
     return sem_acento.strip().lower()
 
 
-def consultar_frete(municipio: str, bairro: str | None = None) -> Decimal | None:
-    """Retorna o valor do frete para o municipio/bairro informado.
+def consultar_frete(municipio: str) -> Decimal | None:
+    """Retorna o valor do frete para o municipio informado.
 
-    Prioridade:
-    1. municipio + bairro exato
-    2. municipio com bairro=NULL (cobre todo o municipio)
-
-    Retorna None se a area nao for coberta.
+    Faz query SQL filtrada por municipio (case-insensitive via indice lower()).
+    Retorna None se o municipio nao for coberto.
     """
     if not municipio:
         return None
 
     try:
+        municipio_norm = _normalizar(municipio)
         resultado = (
             supabase.table(_TABELA)
-            .select("municipio, bairro, valor_frete")
+            .select("municipio, valor_frete")
             .eq("ativo", True)
+            .is_("bairro", "null")
+            .ilike("municipio", municipio_norm)
+            .limit(1)
             .execute()
         )
-        if not resultado.data:
-            return None
 
-        municipio_norm = _normalizar(municipio)
-        bairro_norm = _normalizar(bairro) if bairro else None
+        if resultado.data:
+            r = resultado.data[0]
+            valor = Decimal(str(r["valor_frete"]))
+            logger.info("Frete encontrado: %s = R$%s", r["municipio"], valor)
+            return valor
 
-        # Filtra registros do municipio
-        candidatos = [
-            r for r in resultado.data
-            if _normalizar(r["municipio"]) == municipio_norm
-        ]
-
-        if not candidatos:
-            logger.info("Municipio '%s' nao coberto para entrega", municipio)
-            return None
-
-        # Prioridade 1: bairro especifico
-        if bairro_norm:
-            for r in candidatos:
-                if r["bairro"] and _normalizar(r["bairro"]) == bairro_norm:
-                    logger.info(
-                        "Frete encontrado: %s / %s = R$%.2f",
-                        municipio, bairro, float(r["valor_frete"]),
-                    )
-                    return Decimal(str(r["valor_frete"]))
-
-        # Prioridade 2: preco municipal (bairro=NULL)
-        for r in candidatos:
-            if r["bairro"] is None:
-                logger.info(
-                    "Frete encontrado: %s = R$%.2f", municipio, float(r["valor_frete"])
-                )
-                return Decimal(str(r["valor_frete"]))
-
+        logger.info("Municipio '%s' nao coberto para entrega", municipio)
         return None
 
     except Exception:

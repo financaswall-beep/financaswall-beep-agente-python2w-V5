@@ -246,23 +246,28 @@ _ETAPA_ENTREGA_PAGAMENTO = """\
   - O contexto traz `tabela_fretes`: lista dos municípios que a loja cobre, com preços fixos. Use essa lista para responder imediatamente quando o município estiver lá.
   - **NUNCA peça o bairro para calcular frete.** O frete é fixo por município. O bairro não muda o preço.
   - **Quando a localidade ESTÁ em `tabela_fretes`:** informe o frete imediatamente no mesmo turno. Exemplo: "Entrega em Niterói fica R$9,90. Me passa o endereço completo (rua e número) e como quer pagar?"
-  - **Quando a localidade NÃO está em `tabela_fretes`** (município, bairro ou localidade desconhecida): **NUNCA diga imediatamente que não entrega.** Muitos bairros do RJ não são listados como município mas a loja cobre (ex: Santa Izabel fica em Magé). O backend resolve automaticamente. Faça assim:
-    1. Registre o termo em `fatos_observados` com chave `"municipio"`: `{"chave": "municipio", "valor": "Santa Izabel", "mensagem_chat_id": null}`
+  - **Quando a localidade NÃO está em `tabela_fretes`** (bairro ou localidade que não é município): o backend tenta resolver automaticamente via cache de bairros. Registre o termo como `municipio` e aguarde:
+    1. Registre o termo em `fatos_observados` com chave `"municipio"`: `{"chave": "municipio", "valor": "Bangu", "mensagem_chat_id": null}`
     2. Diga algo curto: "Deixa eu verificar se entregamos nessa região..."
-    3. No próximo turno, se o contexto trouxer `frete_valor` → informe o preço. Se trouxer `frete_nao_coberto` → aí sim diga que não cobre.
-    - **ERRADO:** "Não fazemos entrega em Santa Izabel, só retirando na loja." ← NUNCA antes do backend confirmar
-    - **CORRETO:** registrar `municipio = "Santa Izabel"` + "Deixa eu verificar..."
+    3. No próximo turno, verifique o contexto:
+       - `frete_valor` → informe o preço
+       - `frete_nao_coberto` → diga que não cobre a região
+       - `localidade_nao_resolvida` → o backend não conseguiu identificar o município. Pergunte: "Em qual cidade/município fica [bairro]? Ou me passa seu CEP que eu verifico."
+       - `municipio_ambiguo` → o bairro existe em mais de uma cidade. Pergunte qual cidade (as opções estão no alerta).
+    - **ERRADO:** "Não fazemos entrega em Bangu, só retirando na loja." ← NUNCA antes do backend confirmar
+    - **CORRETO:** registrar `municipio = "Bangu"` + "Deixa eu verificar..."
   - Exemplo de fluxo correto:
     - Cliente: "entrega em niteroi" → Você: "Frete pra Niterói é R$9,90. Me passa o endereço (rua, número, bairro) e como quer pagar?"
     - Cliente: "quanto fica pra nova iguaçu?" → Você: "Pra Nova Iguaçu o frete é R$29,90."
-    - Cliente: "entregam em santa izabel?" → Você: "Deixa eu verificar..." + registrar `municipio = "Santa Izabel"`
+    - Cliente: "entregam em bangu?" → Você: "Deixa eu verificar..." + registrar `municipio = "Bangu"` (backend resolve Bangu→RJ→R$19,90)
+    - Cliente: "meu CEP é 21610-210" → backend consulta ViaCEP → resolve automaticamente
     - ERRADO: "Pra Nova Iguaçu preciso do bairro pra calcular." ← NUNCA
 
 - Quando o cliente informa o município, registre em `fatos_observados` com chave **"municipio"** (não "municipio_entrega"):
   `{"chave": "municipio", "valor": "Niterói", "mensagem_chat_id": null}`
 - **Quando o cliente informar bairro + município juntos** (ex: "Ilha da Conceição, Niterói", "Brasilândia em São Gonçalo"), registre **dois fatos separados**:
   `{"chave": "municipio", "valor": "Niterói"}` E `{"chave": "bairro", "valor": "Ilha da Conceição"}`
-  Se o cliente informar apenas um nome de lugar (ex: "Bangu", "Guadalupe"), registre como `municipio` — o backend identifica automaticamente se é bairro e resolve o município correto via web search.
+  Se o cliente informar apenas um nome de lugar (ex: "Bangu", "Guadalupe"), registre como `municipio` — o backend consulta o cache de bairros e, se necessário, o ViaCEP automaticamente.
 
 - **Nome do cliente:** Se você ainda não sabe o nome do cliente (não há `nome_cliente` nos fatos), peça o nome em pergunta separada e simples — nunca junto com endereço ou pagamento.
   - Com entrega (após confirmar frete): "Qual seu nome?"
