@@ -90,14 +90,18 @@ def _montar_confirmacao_pedido(pedido) -> str:
             if pedido.endereco_entrega_json:
                 end = pedido.endereco_entrega_json
                 if isinstance(end, dict):
+                    # Tenta estrutura detalhada primeiro, cai no campo "endereco" se nao tiver
                     partes = [
                         end.get("logradouro", ""),
                         end.get("numero", ""),
                         end.get("bairro", ""),
+                        end.get("municipio", ""),
                     ]
                     endereco = ", ".join(p for p in partes if p)
+                    if not endereco:
+                        endereco = end.get("endereco", "")
                 else:
-                    endereco = str(end.get("endereco", end) if isinstance(end, dict) else end)
+                    endereco = str(end)
             entrega_texto = f"🚚 Entrega: {endereco}" if endereco else "🚚 Entrega a combinar"
             if pedido.valor_frete and pedido.valor_frete > 0:
                 entrega_texto += f"\n   Frete: R${pedido.valor_frete:.2f}"
