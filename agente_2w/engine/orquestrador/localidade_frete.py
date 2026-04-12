@@ -167,6 +167,42 @@ def _consultar_e_registrar_frete(sessao_id: UUID) -> None:
                 if bairro_parsed and not bairro:
                     bairro = bairro_parsed
 
+        # --- Safety net 10: bairro registrado mas municipio ausente ---
+        # Quando a IA registra o bairro (ex: "Anaia") mas nao o municipio,
+        # o codigo tenta resolver automaticamente via cache.
+        # Evita que o agente pergunte "me confirma a cidade" desnecessariamente.
+        if not municipio and bairro:
+            from agente_2w.tools.resolver_bairro import resolver_bairro_municipio
+            try:
+                bairro_res, municipio_res, ambiguos = resolver_bairro_municipio(bairro)
+                if ambiguos:
+                    # Bairro existe em 2+ municipios — registrar para o agente perguntar
+                    contexto_repo.registrar_fato(ContextoConversaCreate(
+                        sessao_chat_id=sessao_id,
+                        chave=ChaveContexto.MUNICIPIO_AMBIGUO,
+                        valor_texto=", ".join(ambiguos),
+                        valor_json={"municipios": ambiguos, "termo": bairro},
+                        tipo_de_verdade=TipoDeVerdade.validado_tool,
+                        nivel_confirmacao=NivelConfirmacao.nenhum,
+                        fonte=OrigemContexto.backend,
+                    ))
+                    logger.info("Safety net 10: bairro '%s' ambiguo: %s", bairro, ambiguos)
+                    return
+                if municipio_res:
+                    municipio = municipio_res
+                    # Persistir municipio resolvido no contexto para turnos seguintes
+                    contexto_repo.registrar_fato(ContextoConversaCreate(
+                        sessao_chat_id=sessao_id,
+                        chave=ChaveContexto.MUNICIPIO,
+                        valor_texto=municipio_res,
+                        tipo_de_verdade=TipoDeVerdade.validado_tool,
+                        nivel_confirmacao=NivelConfirmacao.confirmado_cliente,
+                        fonte=OrigemContexto.backend,
+                    ))
+                    logger.info("Safety net 10: bairro '%s' resolvido -> municipio='%s'", bairro, municipio_res)
+            except Exception:
+                logger.exception("Safety net 10 falhou para bairro '%s'", bairro)
+
         if not municipio:
             return
 
