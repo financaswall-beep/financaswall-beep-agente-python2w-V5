@@ -80,30 +80,51 @@ def salvar(
     municipio=None indica área fora de cobertura — também é salvo para
     evitar nova consulta para o mesmo termo.
 
-    Usa UPSERT no unique index (termo_normalizado, municipio) para evitar
-    duplicatas. Se o par (termo, municipio) já existe, atualiza acessos.
+    Usa SELECT → INSERT/UPDATE para compatibilidade com o índice
+    uq_cache_termo_municipio que usa COALESCE(municipio, '').
     """
     if not termo_original:
         return
 
     chave = _normalizar(termo_original)
-    try:
-        payload = {
-            "termo_normalizado": chave,
-            "termo_original": termo_original,
-            "bairro": bairro,
-            "municipio": municipio,
-            "fonte": fonte,
-            "acessos": 1,
-            "atualizado_em": datetime.now(timezone.utc).isoformat(),
-        }
-        if sessao_id:
-            payload["sessao_id"] = str(sessao_id)
+    agora = datetime.now(timezone.utc).isoformat()
 
-        supabase.table(_TABELA).upsert(
-            payload,
-            on_conflict="termo_normalizado,municipio",
-        ).execute()
+    try:
+        # Verifica se par (termo, municipio) já existe
+        query = supabase.table(_TABELA).select("id, acessos").eq("termo_normalizado", chave)
+        if municipio is not None:
+            query = query.eq("municipio", municipio)
+        else:
+            query = query.is_("municipio", "null")
+        res = query.limit(1).execute()
+
+        if res.data:
+            # Já existe — atualiza
+            row_id = res.data[0]["id"]
+            acessos_atual = res.data[0].get("acessos") or 0
+            update_payload = {
+                "bairro": bairro,
+                "fonte": fonte,
+                "acessos": acessos_atual + 1,
+                "atualizado_em": agora,
+            }
+            if sessao_id:
+                update_payload["sessao_id"] = str(sessao_id)
+            supabase.table(_TABELA).update(update_payload).eq("id", row_id).execute()
+        else:
+            # Novo — insere
+            insert_payload = {
+                "termo_normalizado": chave,
+                "termo_original": termo_original,
+                "bairro": bairro,
+                "municipio": municipio,
+                "fonte": fonte,
+                "acessos": 1,
+                "atualizado_em": agora,
+            }
+            if sessao_id:
+                insert_payload["sessao_id"] = str(sessao_id)
+            supabase.table(_TABELA).insert(insert_payload).execute()
 
         logger.info(
             "Cache salvo: '%s' → bairro=%s, municipio=%s [%s]",
