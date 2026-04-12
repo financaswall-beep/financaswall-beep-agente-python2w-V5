@@ -208,6 +208,14 @@ def _chamar_e_validar(contexto, mensagem_texto: str, imagens: list[str] | None =
                 erros_validacao = _revalidar(envelope, contexto)
 
         if not erros_validacao:
+            # C9: detectar falso negativo — IA disse "nao temos" mas tools retornaram pneus
+            from agente_2w.engine.orquestrador.guardrails import detectar_falso_negativo
+            if detectar_falso_negativo(envelope, todos_pneus) and tentativa < MAX_RETRIES:
+                erros_anteriores = [
+                    "ERRO: voce disse que nao tem pneu disponivel, mas a tool retornou "
+                    f"{len(todos_pneus)} resultado(s). Apresente os pneus encontrados ao cliente."
+                ]
+                continue
             return envelope, todos_pneus
 
         logger.warning(

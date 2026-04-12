@@ -124,6 +124,31 @@ def _aplicar_mudancas_itens(sessao_id: UUID, mudancas, pneus_encontrados: list[d
                 # --- GUARDA ANTI-DUPLICATA: nao criar item se ja existe um ativo
                 # com o mesmo pneu_id na sessao. Evita duplicacao por IA ou race condition.
                 if pneu_uuid:
+                    # C8: validar que pneu_id existe nos resultados ou no catalogo
+                    _pneu_valido = False
+                    # 1. Verificar nos pneus encontrados neste turno
+                    if pneus_encontrados:
+                        _pneu_valido = any(
+                            str(p.get("pneu_id")) == str(pneu_uuid)
+                            for p in pneus_encontrados
+                        )
+                    # 2. Verificar no DB (catalogo)
+                    if not _pneu_valido:
+                        try:
+                            from agente_2w.db import catalogo_repo as _cat_c8
+                            _estoque_c8 = _cat_c8.buscar_estoque_por_pneu(pneu_uuid)
+                            _pneu_valido = _estoque_c8 is not None
+                        except Exception:
+                            logger.exception("C8: falha ao validar pneu_id=%s no catalogo", pneu_uuid)
+                            _pneu_valido = False
+                    if not _pneu_valido:
+                        logger.warning(
+                            "C8: pneu_id=%s NAO existe nos resultados nem no catalogo — "
+                            "item descartado (possivel alucinacao do LLM)",
+                            pneu_uuid,
+                        )
+                        continue
+
                     itens_existentes = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
                     duplicata = next(
                         (i for i in itens_existentes if i.pneu_id and str(i.pneu_id) == str(pneu_uuid)),

@@ -69,3 +69,44 @@ def _aplicar_guardrail(envelope, etapa_atual):
     envelope.acoes_sugeridas = acoes
     envelope.etapa_atual = etapa
     return envelope
+
+
+# --- C9: detectar "nao temos" quando tools retornaram resultados ---
+
+import re
+
+_RE_NEGACAO = re.compile(
+    r"(?:n[aã]o temos|n[aã]o encontrei|n[aã]o achei|infelizmente n[aã]o|"
+    r"n[aã]o temos dispon[ií]vel|n[aã]o tem em estoque|"
+    r"n[aã]o tive resultado|sem resultado|nenhum pneu encontrado)",
+    re.IGNORECASE,
+)
+
+
+def detectar_falso_negativo(envelope, pneus_encontrados: list[dict]) -> bool:
+    """Retorna True se a IA disse 'nao temos' mas tools retornaram pneus.
+
+    Nao corrige (mensagem ja foi gerada). Loga WARNING para diagnostico
+    e marca no envelope para que o retry corrija na proxima tentativa.
+    """
+    if not pneus_encontrados:
+        return False
+
+    msg = getattr(envelope, "mensagem_cliente", "") or ""
+    if not _RE_NEGACAO.search(msg):
+        return False
+
+    # Contar pneus unicos com estoque
+    pneus_unicos = {str(p["pneu_id"]) for p in pneus_encontrados if p.get("pneu_id")}
+    if not pneus_unicos:
+        return False
+
+    logger.warning(
+        "C9 FALSO NEGATIVO: IA disse '%s' mas tools retornaram %d pneu(s). "
+        "IDs: %s. Mensagem completa: '%s'",
+        _RE_NEGACAO.search(msg).group(),
+        len(pneus_unicos),
+        list(pneus_unicos)[:3],
+        msg[:200],
+    )
+    return True
