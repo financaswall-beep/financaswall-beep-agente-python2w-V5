@@ -185,6 +185,8 @@ def _consultar_e_registrar_frete(sessao_id: UUID) -> None:
                 pass
 
         # Idempotencia: se frete já calculado pro mesmo município, não recalcula
+        # EXCETO se resultado anterior foi frete_nao_coberto — sempre recalcular
+        # para corrigir falsos negativos (ex: bug de normalização já corrigido).
         fato_frete = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.FRETE_VALOR)
         fato_nao_coberto = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.FRETE_NAO_COBERTO)
         if fato_frete or fato_nao_coberto:
@@ -194,10 +196,11 @@ def _consultar_e_registrar_frete(sessao_id: UUID) -> None:
             elif fato_frete and fato_frete.valor_json and isinstance(fato_frete.valor_json, dict):
                 municipio_anterior = fato_frete.valor_json.get("municipio")
 
-            if municipio and municipio_anterior and municipio_anterior.lower() == municipio.lower():
-                return  # mesmo município, frete já calculado
+            # Se o resultado anterior foi frete_valor (positivo) e mesmo município, skip
+            if fato_frete and not fato_nao_coberto and municipio and municipio_anterior and municipio_anterior.lower() == municipio.lower():
+                return  # mesmo município, frete já calculado corretamente
 
-            # Município mudou — limpar frete antigo
+            # Município mudou OU resultado anterior era frete_nao_coberto — limpar e recalcular
             for chave_frete in (ChaveContexto.FRETE_VALOR, ChaveContexto.FRETE_NAO_COBERTO):
                 try:
                     contexto_repo.desativar_fato_anterior(sessao_id, chave_frete)
