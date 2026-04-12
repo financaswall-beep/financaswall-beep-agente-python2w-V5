@@ -35,7 +35,7 @@ def buscar(termo: str) -> dict | None:
     try:
         res = (
             supabase.table(_TABELA)
-            .select("bairro, municipio")
+            .select("bairro, municipio, acessos")
             .eq("termo_normalizado", chave)
             .limit(1)
             .execute()
