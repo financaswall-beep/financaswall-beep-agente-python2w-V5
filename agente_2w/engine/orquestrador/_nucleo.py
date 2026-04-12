@@ -1133,6 +1133,58 @@ def processar_turno(
                         except Exception:
                             logger.exception("Rede de seguranca 9c falhou")
 
+    # --- 9d. Rede de seguranca: IA diz "anotado" mas nao criou item ---
+    # Detecta keywords de confirmacao na mensagem + mudancas_itens vazio + pneus disponiveis
+    # + etapa em oferta/confirmacao_item → auto-cria item.
+    # Diferente de 9b (que exige etapa == confirmacao_item), 9d cobre oferta e busca->oferta.
+    if envelope.etapa_atual in (EtapaFluxo.oferta, EtapaFluxo.confirmacao_item):
+        _tem_criar_9d = any(
+            getattr(m, "acao", None) == "criar"
+            for m in envelope.mudancas_itens
+        )
+        if not _tem_criar_9d:
+            _msg_9d = (envelope.mensagem_cliente or "").lower()
+            _keywords_9d = ("anotado", "certo", "confirmado", "registrado", "anotei", "fechado")
+            _menciona_confirmacao_9d = any(k in _msg_9d for k in _keywords_9d)
+            if _menciona_confirmacao_9d and pneus_encontrados:
+                _itens_9d = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
+                _itens_com_pneu_9d = [i for i in _itens_9d if i.pneu_id]
+                if not _itens_com_pneu_9d:
+                    _vistos_9d: set = set()
+                    _unicos_9d = []
+                    for p in pneus_encontrados:
+                        pid = p.get("pneu_id")
+                        if pid and pid not in _vistos_9d:
+                            _vistos_9d.add(pid)
+                            _unicos_9d.append(p)
+                    # So auto-criar se 1 pneu (sem ambiguidade de qual o cliente queria)
+                    if len(_unicos_9d) == 1:
+                        _fato_recusa_9d = contexto_repo.buscar_fato_ativo(
+                            sessao_id, ChaveContexto.CLIENTE_RECUSOU_OPCAO_ATUAL
+                        )
+                        if not _fato_recusa_9d:
+                            _p9d = _unicos_9d[0]
+                            try:
+                                _pneu_uuid_9d = UUID(str(_p9d["pneu_id"]))
+                                _preco_9d = float(_p9d["preco_venda"]) if _p9d.get("preco_venda") else None
+                                _posicao_9d = _p9d.get("posicao")
+                                item_provisorio_repo.criar_item(ItemProvisorioCreate(
+                                    sessao_chat_id=sessao_id,
+                                    status_item=StatusItemProvisorio.selecionado_cliente,
+                                    pneu_id=_pneu_uuid_9d,
+                                    posicao=_posicao_9d,
+                                    quantidade=1,
+                                    preco_unitario_sugerido=_preco_9d,
+                                ))
+                                logger.info(
+                                    "Rede de seguranca 9d: item criado automaticamente pneu_id=%s "
+                                    "(IA disse '%s' mas nao incluiu mudancas_itens:criar)",
+                                    _pneu_uuid_9d,
+                                    next((k for k in _keywords_9d if k in _msg_9d), "?"),
+                                )
+                            except Exception:
+                                logger.exception("Rede de seguranca 9d falhou")
+
     # --- 10. Despachar acoes sugeridas ---
     pedido_criado = _despachar_acoes(sessao_id, envelope.acoes_sugeridas)
     if chatwoot_conv_id and pedido_criado:
