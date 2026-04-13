@@ -168,6 +168,8 @@ async def lifespan(app: FastAPI):
     logger.info("  Account ID:  %s", CHATWOOT_ACCOUNT_ID)
     logger.info("  Supabase:    %s...", SUPABASE_URL[:40])
     logger.info("  Modelo:      %s", OPENAI_MODEL)
+    if not CHATWOOT_WEBHOOK_SECRET:
+        logger.critical("CHATWOOT_WEBHOOK_SECRET nao configurada — webhook /webhook/chatwoot bloqueado ate ser configurada")
 
     # Inicia scheduler de auto-resolve (roda a cada 6 horas)
     async def _scheduler():
@@ -264,7 +266,8 @@ def _extrair_telefone_do_identifier(identifier: str) -> str:
 def _verificar_assinatura(body: bytes, timestamp: str, signature: str) -> bool:
     """Valida HMAC-SHA256 do webhook no formato do Chatwoot."""
     if not CHATWOOT_WEBHOOK_SECRET:
-        return True
+        logger.critical("CHATWOOT_WEBHOOK_SECRET ausente — rejeitando webhook (B10)")
+        return False
     if not timestamp or not signature:
         return False
     message = f"{timestamp}.".encode() + body
@@ -525,7 +528,7 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     body = await request.body()
     signature = request.headers.get("x-chatwoot-signature", "")
     timestamp = request.headers.get("x-chatwoot-timestamp", "")
-    if CHATWOOT_WEBHOOK_SECRET and not _verificar_assinatura(body, timestamp, signature):
+    if not _verificar_assinatura(body, timestamp, signature):
         logger.warning("Assinatura invalida no webhook")
         raise HTTPException(status_code=401, detail="Assinatura invalida")
 
