@@ -46,12 +46,35 @@ def desativar_fato_anterior(
 
 
 def registrar_fato(dados: ContextoConversaCreate) -> ContextoConversa:
-    desativar_fato_anterior(
-        sessao_id=dados.sessao_chat_id,
-        chave=dados.chave,
-        item_provisorio_id=dados.item_provisorio_id,
-    )
-    return criar_fato(dados)
+    """Desativa fato anterior e cria o novo em transação atômica via RPC.
+
+    Usa registrar_fato_atomico para garantir que se o INSERT falhar,
+    o UPDATE de desativação é revertido — nenhum dado de contexto é perdido.
+    """
+    try:
+        params = {
+            "p_sessao_chat_id": str(dados.sessao_chat_id),
+            "p_chave": dados.chave,
+            "p_item_provisorio_id": str(dados.item_provisorio_id) if dados.item_provisorio_id else None,
+            "p_tipo_de_verdade": dados.tipo_de_verdade.value,
+            "p_nivel_confirmacao": dados.nivel_confirmacao.value,
+            "p_fonte": dados.fonte.value,
+            "p_valor_texto": dados.valor_texto,
+            "p_valor_json": dados.valor_json,
+            "p_mensagem_chat_id": str(dados.mensagem_chat_id) if dados.mensagem_chat_id else None,
+            "p_referencia_fonte": dados.referencia_fonte,
+            "p_observacao": dados.observacao,
+            "p_ativo": dados.ativo,
+        }
+        resultado = supabase.rpc("registrar_fato_atomico", params).execute()
+        if not resultado.data:
+            raise ErroDeInsercao(_TABELA, f"RPC retornou vazio para chave={dados.chave}")
+        logger.debug("Fato registrado atomicamente: chave=%s", dados.chave)
+        return ContextoConversa(**resultado.data[0])
+    except (ErroDeInsercao, ErroDeAtualizacao):
+        raise
+    except Exception as e:
+        raise ErroDeInsercao(_TABELA, f"chave={dados.chave}: {e}") from e
 
 
 def listar_fatos_ativos(sessao_id: UUID) -> list[ContextoConversa]:

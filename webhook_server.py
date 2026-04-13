@@ -17,6 +17,7 @@ from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from threading import Lock
+from uuid import UUID
 
 import tempfile
 
@@ -151,12 +152,61 @@ async def _auto_resolver_conversas(horas: int = 72) -> int:
             if not pedidos.data:
                 continue
             await asyncio.to_thread(chatwoot_sync.resolver_conversa, s["chatwoot_conv_id"])
+            await asyncio.to_thread(sessao_repo.fechar_sessao, UUID(s["id"]))
             logger.info("Auto-resolve: conv=%s sessao=%s", s["chatwoot_conv_id"], s["id"])
             resolvidas += 1
         except Exception:
             logger.warning("Falha ao auto-resolver conv=%s", s.get("chatwoot_conv_id"), exc_info=True)
 
     return resolvidas
+
+
+async def _recovery_cliente_perdido() -> int:
+    """Envia mensagem de recovery para sessoes ativas sem resposta entre 2h e 2h35min.
+
+    A janela de 35min garante que cada sessao receba a mensagem exatamente uma vez:
+    o scheduler roda a cada 30min, entao qualquer sessao que cruzar a marca de 2h
+    sera capturada em exatamente um ciclo.
+
+    Retorna numero de clientes contactados.
+    """
+    from agente_2w import chatwoot_sync
+    from agente_2w.db.client import supabase
+
+    agora = datetime.now(timezone.utc)
+    corte_max = (agora - timedelta(hours=2)).isoformat()
+    corte_min = (agora - timedelta(hours=2, minutes=35)).isoformat()
+
+    try:
+        res = (
+            supabase.table("sessao_chat")
+            .select("id, chatwoot_conv_id")
+            .not_.is_("chatwoot_conv_id", "null")
+            .neq("status_sessao", StatusSessao.fechada.value)
+            .lt("ultima_interacao_em", corte_max)
+            .gte("ultima_interacao_em", corte_min)
+            .execute()
+        )
+        sessoes = res.data or []
+    except Exception:
+        logger.exception("Erro ao buscar sessoes para recovery (F1)")
+        return 0
+
+    contactados = 0
+    for s in sessoes:
+        try:
+            conv_id = s["chatwoot_conv_id"]
+            await _enviar_mensagem_chatwoot(
+                conv_id,
+                "Ol\u00e1! Ainda posso te ajudar com sua busca por pneus? \u00c9 s\u00f3 me chamar aqui \U0001f642",
+            )
+            await asyncio.to_thread(chatwoot_sync.adicionar_label, conv_id, "cliente_perdido")
+            logger.info("Recovery enviado: conv=%s sessao=%s", conv_id, s["id"])
+            contactados += 1
+        except Exception:
+            logger.warning("Falha ao enviar recovery para conv=%s", s.get("chatwoot_conv_id"), exc_info=True)
+
+    return contactados
 
 
 @asynccontextmanager
@@ -168,6 +218,8 @@ async def lifespan(app: FastAPI):
     logger.info("  Account ID:  %s", CHATWOOT_ACCOUNT_ID)
     logger.info("  Supabase:    %s...", SUPABASE_URL[:40])
     logger.info("  Modelo:      %s", OPENAI_MODEL)
+    if not CHATWOOT_WEBHOOK_SECRET:
+        logger.critical("CHATWOOT_WEBHOOK_SECRET nao configurada — webhook /webhook/chatwoot bloqueado ate ser configurada")
 
     # Inicia scheduler de auto-resolve (roda a cada 6 horas)
     async def _scheduler():
@@ -181,9 +233,23 @@ async def lifespan(app: FastAPI):
                 logger.exception("Erro no scheduler de auto-resolve")
             await asyncio.sleep(6 * 3600)
 
+    # Inicia scheduler de recovery cliente_perdido (F1 — roda a cada 30min)
+    async def _scheduler_recovery():
+        await asyncio.sleep(1800)  # aguarda 30min após startup
+        while True:
+            try:
+                n = await _recovery_cliente_perdido()
+                if n:
+                    logger.info("Recovery cliente_perdido: %d sessao(s) contactadas", n)
+            except Exception:
+                logger.exception("Erro no scheduler de recovery")
+            await asyncio.sleep(1800)
+
     task = asyncio.create_task(_scheduler())
+    task_f1 = asyncio.create_task(_scheduler_recovery())
     yield
     task.cancel()
+    task_f1.cancel()
     await _http.aclose()
     logger.info("Webhook encerrado")
 
@@ -191,8 +257,27 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Agente 2W Pneus - Webhook", lifespan=lifespan)
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Middleware de autenticacao para endpoints /internal/*  (B7)
 # ---------------------------------------------------------------------------
+
+_INTERNAL_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
+
+
+@app.middleware("http")
+async def _auth_internal(request: Request, call_next):
+    """Rejeita chamadas a /internal/* sem token valido no header Authorization."""
+    if request.url.path.startswith("/internal/"):
+        if not _INTERNAL_TOKEN:
+            logger.warning("INTERNAL_API_TOKEN nao configurado — bloqueando acesso a %s", request.url.path)
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=503, content={"detail": "Servico nao configurado"})
+        auth = request.headers.get("Authorization", "")
+        token = auth.removeprefix("Bearer ").strip()
+        if not hmac.compare_digest(token, _INTERNAL_TOKEN):
+            logger.warning("Acesso nao autorizado a %s (IP=%s)", request.url.path, request.client.host if request.client else "?")
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=401, content={"detail": "Nao autorizado"})
+    return await call_next(request)
 
 
 def _normalizar_telefone(raw: str) -> str:
@@ -245,7 +330,8 @@ def _extrair_telefone_do_identifier(identifier: str) -> str:
 def _verificar_assinatura(body: bytes, timestamp: str, signature: str) -> bool:
     """Valida HMAC-SHA256 do webhook no formato do Chatwoot."""
     if not CHATWOOT_WEBHOOK_SECRET:
-        return True
+        logger.critical("CHATWOOT_WEBHOOK_SECRET ausente — rejeitando webhook (B10)")
+        return False
     if not timestamp or not signature:
         return False
     message = f"{timestamp}.".encode() + body
@@ -396,6 +482,102 @@ async def health():
         raise HTTPException(status_code=503, detail="Supabase indisponivel")
 
 
+# ---------------------------------------------------------------------------
+# Handler de logistica via labels do Chatwoot
+# ---------------------------------------------------------------------------
+_LABELS_LOGISTICA = {"separando", "em_transito", "entregue", "nao_efetuada"}
+
+# Transições válidas: status_atual -> {status_destino, ...}
+_TRANSICOES_LOGISTICA: dict[str, set[str]] = {
+    "confirmado": {"separando", "entregue"},
+    "separando": {"em_transito", "entregue", "nao_efetuada"},
+    "em_transito": {"entregue", "nao_efetuada"},
+}
+
+# Pedidos já processados (idempotência em memória)
+_logistica_processado: set[str] = set()
+
+
+def _processar_label_logistica(data: dict) -> dict:
+    """Processa labels de logística em conversation_updated."""
+    conversation = data.get("conversation") or data.get("data", {}).get("conversation", {})
+    if not conversation:
+        return {"status": "ignored", "reason": "no_conversation"}
+
+    conv_id = conversation.get("id")
+    labels: list[str] = conversation.get("labels", [])
+
+    # Verifica se alguma label de logística foi aplicada
+    labels_logistica = [l for l in labels if l in _LABELS_LOGISTICA]
+    if not labels_logistica:
+        return {"status": "ignored", "reason": "no_logistica_label"}
+
+    # Pega o status mais avançado se houver múltiplas
+    _ORDEM = ["separando", "em_transito", "entregue", "nao_efetuada"]
+    novo_status = max(labels_logistica, key=lambda l: _ORDEM.index(l) if l in _ORDEM else -1)
+
+    # Idempotência
+    chave = f"{conv_id}:{novo_status}"
+    if chave in _logistica_processado:
+        logger.info("Logistica: conv=%s status=%s ja processado (idempotente)", conv_id, novo_status)
+        return {"status": "ok", "logistica": "already_processed"}
+
+    # Buscar pedido pela conversa
+    from agente_2w.db import pedido_repo, catalogo_repo
+
+    pedido = pedido_repo.buscar_pedido_por_chatwoot_conv(conv_id)
+    if not pedido:
+        logger.warning("Logistica: nenhum pedido para conv=%s", conv_id)
+        return {"status": "error", "reason": "no_pedido_for_conversation"}
+
+    # Validar transição
+    status_atual = pedido.status_pedido.value
+    permitidos = _TRANSICOES_LOGISTICA.get(status_atual, set())
+    if novo_status not in permitidos:
+        logger.warning(
+            "Logistica: transicao %s -> %s nao permitida (conv=%s pedido=%s)",
+            status_atual, novo_status, conv_id, pedido.numero_pedido,
+        )
+        return {
+            "status": "error",
+            "reason": f"transicao {status_atual} -> {novo_status} nao permitida",
+            "permitidos": sorted(permitidos),
+        }
+
+    # Atualizar status
+    pedido_repo.atualizar_status_pedido(pedido.id, novo_status)
+    logger.info("Logistica: pedido #%s -> %s (conv=%s)", pedido.numero_pedido, novo_status, conv_id)
+
+    # Ações no estoque por status
+    if novo_status == "entregue":
+        # Baixa física: disponivel -= qty, reservado -= qty
+        itens = pedido_repo.listar_itens_pedido(pedido.id)
+        for item in itens:
+            catalogo_repo.baixar_estoque_fisico(item.pneu_id, item.quantidade)
+        logger.info("Logistica: baixa fisica de %d itens do pedido #%s", len(itens), pedido.numero_pedido)
+
+    elif novo_status == "nao_efetuada":
+        # Libera reserva (pneu volta ao disponível), estoque físico intacto
+        itens = pedido_repo.listar_itens_pedido(pedido.id)
+        for item in itens:
+            catalogo_repo.decrementar_reservado(item.pneu_id, item.quantidade)
+        logger.info("Logistica: reserva liberada de %d itens do pedido #%s", len(itens), pedido.numero_pedido)
+
+    # Nota privada no Chatwoot
+    from agente_2w import chatwoot_sync
+    _STATUS_LABEL = {
+        "separando": "📦 Pedido em separação",
+        "em_transito": "🚚 Pedido em trânsito",
+        "entregue": "✅ Pedido entregue — estoque baixado",
+        "nao_efetuada": "⚠️ Entrega não efetuada — reserva liberada",
+    }
+    chatwoot_sync.nota_privada(conv_id, f"[LOGISTICA] {_STATUS_LABEL.get(novo_status, novo_status)}")
+
+    _logistica_processado.add(chave)
+
+    return {"status": "ok", "logistica": novo_status, "pedido": pedido.numero_pedido}
+
+
 @app.get("/version")
 async def version():
     """Retorna versao do codigo deployado."""
@@ -410,14 +592,19 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     body = await request.body()
     signature = request.headers.get("x-chatwoot-signature", "")
     timestamp = request.headers.get("x-chatwoot-timestamp", "")
-    if CHATWOOT_WEBHOOK_SECRET and not _verificar_assinatura(body, timestamp, signature):
+    if not _verificar_assinatura(body, timestamp, signature):
         logger.warning("Assinatura invalida no webhook")
         raise HTTPException(status_code=401, detail="Assinatura invalida")
 
     data = await request.json()
 
-    # 2. Filtrar: processar eventos de mensagem recebida do Chatwoot
+    # 2. Filtrar eventos
     event = data.get("event")
+
+    # --- Handler de logistica via labels do Chatwoot ---
+    if event == "conversation_updated":
+        return _processar_label_logistica(data)
+
     if event not in {"message_created", "message_incoming"}:
         logger.info("Webhook ignorado: event=%s", event)
         return {"status": "ignored", "event": event}
