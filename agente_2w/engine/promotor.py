@@ -297,7 +297,7 @@ def promover_para_pedido(sessao_id: UUID) -> Pedido:
     # sejam promovidos junto com o item correto.
     vistos: dict[str, object] = {}
     for item in itens_validados:
-        chave = f"{item.pneu_id}|{item.posicao_moto or ''}"
+        chave = f"{item.pneu_id}|{item.posicao or ''}"
         if chave in vistos:
             antigo = vistos[chave]
             # Manter o mais recente (criado_em maior)
