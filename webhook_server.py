@@ -17,6 +17,7 @@ from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from threading import Lock
+from uuid import UUID
 
 import tempfile
 
@@ -151,12 +152,61 @@ async def _auto_resolver_conversas(horas: int = 72) -> int:
             if not pedidos.data:
                 continue
             await asyncio.to_thread(chatwoot_sync.resolver_conversa, s["chatwoot_conv_id"])
+            await asyncio.to_thread(sessao_repo.fechar_sessao, UUID(s["id"]))
             logger.info("Auto-resolve: conv=%s sessao=%s", s["chatwoot_conv_id"], s["id"])
             resolvidas += 1
         except Exception:
             logger.warning("Falha ao auto-resolver conv=%s", s.get("chatwoot_conv_id"), exc_info=True)
 
     return resolvidas
+
+
+async def _recovery_cliente_perdido() -> int:
+    """Envia mensagem de recovery para sessoes ativas sem resposta entre 2h e 2h35min.
+
+    A janela de 35min garante que cada sessao receba a mensagem exatamente uma vez:
+    o scheduler roda a cada 30min, entao qualquer sessao que cruzar a marca de 2h
+    sera capturada em exatamente um ciclo.
+
+    Retorna numero de clientes contactados.
+    """
+    from agente_2w import chatwoot_sync
+    from agente_2w.db.client import supabase
+
+    agora = datetime.now(timezone.utc)
+    corte_max = (agora - timedelta(hours=2)).isoformat()
+    corte_min = (agora - timedelta(hours=2, minutes=35)).isoformat()
+
+    try:
+        res = (
+            supabase.table("sessao_chat")
+            .select("id, chatwoot_conv_id")
+            .not_.is_("chatwoot_conv_id", "null")
+            .neq("status_sessao", StatusSessao.fechada.value)
+            .lt("ultima_interacao_em", corte_max)
+            .gte("ultima_interacao_em", corte_min)
+            .execute()
+        )
+        sessoes = res.data or []
+    except Exception:
+        logger.exception("Erro ao buscar sessoes para recovery (F1)")
+        return 0
+
+    contactados = 0
+    for s in sessoes:
+        try:
+            conv_id = s["chatwoot_conv_id"]
+            await _enviar_mensagem_chatwoot(
+                conv_id,
+                "Ol\u00e1! Ainda posso te ajudar com sua busca por pneus? \u00c9 s\u00f3 me chamar aqui \U0001f642",
+            )
+            await asyncio.to_thread(chatwoot_sync.adicionar_label, conv_id, "cliente_perdido")
+            logger.info("Recovery enviado: conv=%s sessao=%s", conv_id, s["id"])
+            contactados += 1
+        except Exception:
+            logger.warning("Falha ao enviar recovery para conv=%s", s.get("chatwoot_conv_id"), exc_info=True)
+
+    return contactados
 
 
 @asynccontextmanager
@@ -183,9 +233,23 @@ async def lifespan(app: FastAPI):
                 logger.exception("Erro no scheduler de auto-resolve")
             await asyncio.sleep(6 * 3600)
 
+    # Inicia scheduler de recovery cliente_perdido (F1 — roda a cada 30min)
+    async def _scheduler_recovery():
+        await asyncio.sleep(1800)  # aguarda 30min após startup
+        while True:
+            try:
+                n = await _recovery_cliente_perdido()
+                if n:
+                    logger.info("Recovery cliente_perdido: %d sessao(s) contactadas", n)
+            except Exception:
+                logger.exception("Erro no scheduler de recovery")
+            await asyncio.sleep(1800)
+
     task = asyncio.create_task(_scheduler())
+    task_f1 = asyncio.create_task(_scheduler_recovery())
     yield
     task.cancel()
+    task_f1.cancel()
     await _http.aclose()
     logger.info("Webhook encerrado")
 
