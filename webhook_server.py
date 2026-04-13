@@ -327,21 +327,36 @@ def _extrair_telefone_do_identifier(identifier: str) -> str:
     return identifier.split("@")[0]
 
 
-def _verificar_assinatura(body: bytes, signature: str) -> bool:
+def _verificar_assinatura(body: bytes, signature: str, timestamp: str = "") -> bool:
     """Valida HMAC-SHA256 do webhook no formato do Chatwoot.
 
-    Chatwoot assina apenas o body (sem timestamp):
-      x-chatwoot-signature: sha256=<HMAC-SHA256(body, secret)>
+    Formato principal do Chatwoot:
+      x-chatwoot-timestamp: <unix_ts>
+      x-chatwoot-signature: sha256=<HMAC-SHA256("<ts>.<body>", secret)>
+
+    Mantemos fallback body-only por compatibilidade defensiva com ambientes
+    antigos ou integrações intermediárias que repassem apenas a assinatura.
     """
     if not CHATWOOT_WEBHOOK_SECRET:
         logger.critical("CHATWOOT_WEBHOOK_SECRET ausente — rejeitando webhook (B10)")
         return False
     if not signature:
         return False
-    expected = "sha256=" + hmac.new(
-        CHATWOOT_WEBHOOK_SECRET.encode(), body, hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature)
+
+    expected_candidates: list[str] = []
+    if timestamp:
+        message = f"{timestamp}.".encode() + body
+        expected_candidates.append(
+            "sha256="
+            + hmac.new(CHATWOOT_WEBHOOK_SECRET.encode(), message, hashlib.sha256).hexdigest()
+        )
+
+    expected_candidates.append(
+        "sha256="
+        + hmac.new(CHATWOOT_WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    )
+
+    return any(hmac.compare_digest(expected, signature) for expected in expected_candidates)
 
 
 def _obter_ou_criar_sessao(telefone: str) -> object:
@@ -594,7 +609,8 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     # 1. Validar assinatura HMAC
     body = await request.body()
     signature = request.headers.get("x-chatwoot-signature", "")
-    if not _verificar_assinatura(body, signature):
+    timestamp = request.headers.get("x-chatwoot-timestamp", "")
+    if not _verificar_assinatura(body, signature, timestamp):
         logger.warning("Assinatura invalida no webhook")
         raise HTTPException(status_code=401, detail="Assinatura invalida")
 
