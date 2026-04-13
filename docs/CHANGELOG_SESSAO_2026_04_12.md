@@ -14,7 +14,7 @@ Sessão focada em **segurança e integridade de dados**: correção de três rac
 | Diretório local V5 | `C:\agente-python2w-V5` |
 | Repositório V4 (backup estável) | `https://github.com/financaswall-beep/financaswall-beep-agente-python2w-V4.git` |
 | Commit inicial V5 | `a25fa26` (clone exato do V4) |
-| Commit final desta sessão | `670ab7a` |
+| Commit final desta sessão | `fa280d9` |
 
 ---
 
@@ -246,6 +246,9 @@ def resolver_ou_criar_cliente(telefone: str, nome: str | None = None) -> Cliente
 |---|---|
 | `a755975` | fix(B7): middleware autenticacao /internal/* |
 | `670ab7a` | test(B7): teste de autenticacao |
+| `a73e3ae` | docs: atualiza changelog com B7 |
+| `93465d7` | fix(B9): enum no campo acao de mudancas_itens |
+| `fa280d9` | test(B9): 14 testes para enum do campo acao |
 | `9ee23b4` | fix(B4): dedup promotor por pneu_id+posicao |
 | `d492dac` | fix(B5): guard de profundidade em processar_turno |
 | `f934aa1` | docs: changelog sessão |
@@ -361,6 +364,47 @@ async def _auth_internal(request: Request, call_next):
 
 ---
 
+### B9 — Campo `acao` sem Enum no Schema do Envelope
+
+**Commit fix:** `93465d7`  
+**Commit teste:** `fa280d9`  
+**Arquivo:** `agente_2w/ia/schemas_envelope.py`  
+**Teste:** `tests/test_b9_acao_enum.py`
+
+**Problema:**  
+O campo `mudancas_itens[].acao` tinha apenas `{"type": "string"}` — sem enum. O modelo poderia retornar qualquer string (`"deletar"`, `"adicionar"`, `"update"`, etc.) e o código em `enriquecimento_itens.py` silenciosamente ignoraria a mudança (cai fora de todos os `if/elif`). O cliente perderia a operação sem erro nem log visível.
+
+**Valores válidos confirmados** (lendo `enriquecimento_itens.py`):
+
+| Ação | Efeito |
+|---|---|
+| `criar` | Cria novo item provisório |
+| `confirmar` | Confirma item → avança para pedido |
+| `atualizar` | Atualiza campos do item |
+| `cancelar` | Cancela item ativo |
+| `rejeitar` | Rejeita item proposto |
+
+**Antes:**
+```python
+"acao": {"type": "string"}
+```
+
+**Depois:**
+```python
+"acao": {"type": "string", "enum": ["criar", "confirmar", "atualizar", "cancelar", "rejeitar"]}
+```
+
+**Por que não causa loop:**  
+O schema é enviado com `"strict": True` para a OpenAI via `response_format: json_schema`. A OpenAI aplica o enum no **nível de samplig de tokens** — o modelo fisicamente não consegue gerar um valor fora do enum. Não há `ValidationError`, não há retry, não há loop.
+
+**Testes (14 cenários):**
+- 5 valores válidos → aceitos pelo schema ✅
+- 6 valores inválidos (`deletar`, `adicionar`, `remover`, `update`, `create`, `CRIAR`, string vazia) → rejeitados com `ValidationError` ✅
+- Lista vazia → válida ✅
+- Todas as 5 ações juntas numa lista → válida ✅
+
+---
+
 ## Resumo Executivo
 
 | # | Bug | Risco | Status |
@@ -374,7 +418,7 @@ async def _auth_internal(request: Request, call_next):
 | B7 | `/internal/*` sem autenticação | Qualquer IP pode fechar conversas ou parar o bot | ✅ Corrigido `a755975` |
 | B7 | `/internal/*` sem autenticação | Qualquer IP pode disparar ações internas | ⚠️ Pendente |
 | B8 | `_turno_async_locks` sem limpeza | Memory leak em produção | ⚠️ Pendente |
-| B9 | Campo `acao` sem enum no schema | IA pode retornar string inválida | ⚠️ Pendente |
+| B9 | Campo `acao` sem enum no schema | IA pode retornar string inválida | ✅ Corrigido `93465d7` |
 | B10 | HMAC webhook vazio | Webhook sem validação de origem | ⚠️ Pendente |
 
 ### Features Pendentes
