@@ -14,7 +14,7 @@ Sessão focada em **segurança e integridade de dados**: correção de três rac
 | Diretório local V5 | `C:\agente-python2w-V5` |
 | Repositório V4 (backup estável) | `https://github.com/financaswall-beep/financaswall-beep-agente-python2w-V4.git` |
 | Commit inicial V5 | `a25fa26` (clone exato do V4) |
-| Commit final desta sessão | `603584e` |
+| Commit final desta sessão | `d1a5cd1` |
 
 ---
 
@@ -240,6 +240,79 @@ def resolver_ou_criar_cliente(telefone: str, nome: str | None = None) -> Cliente
 
 ---
 
+### Commits adicionais nesta sessão
+
+| Commit | Descrição |
+|---|---|
+| `9ee23b4` | fix(B4): dedup promotor por pneu_id+posicao |
+| `d492dac` | fix(B5): guard de profundidade em processar_turno |
+| `f934aa1` | docs: changelog sessão |
+| `2f354ce` | test(B3): teste de concorrência |
+| `d1a5cd1` | test(B4,B5): testes de dedup e guard de recursão |
+
+---
+
+### B4 — Dedup do Promotor por `pneu_id` Apenas
+
+**Commit:** `9ee23b4`  
+**Arquivo:** `agente_2w/engine/promotor.py`  
+**Teste:** `tests/test_b4_b5.py`
+
+**Problema:**  
+O dedup de itens provisórios no promotor usava apenas `pneu_id` como chave. Se um cliente pedisse o **mesmo pneu para dianteira E traseira** (comum em motos que usam o mesmo modelo nas duas rodas), o dedup eliminava um dos dois itens silenciosamente — o pedido saía com apenas 1 pneu em vez de 2.
+
+**Antes:**
+```python
+chave = str(item.pneu_id)   # "abc-123"
+```
+
+**Depois:**
+```python
+chave = f"{item.pneu_id}|{item.posicao_moto or ''}"  # "abc-123|dianteira" vs "abc-123|traseira"
+```
+
+**Testes (3 cenários):**
+- Mesmo pneu em dianteira + traseira → ambos mantidos ✅
+- Mesmo pneu na mesma posição → antigo eliminado, novo fica ✅
+- Sem posição → dedup por pneu_id continua igual ✅
+
+---
+
+### B5 — Recursão Sem Guard em `processar_turno`
+
+**Commit:** `d492dac`  
+**Arquivo:** `agente_2w/engine/orquestrador/_nucleo.py`  
+**Teste:** `tests/test_b4_b5.py`
+
+**Problema:**  
+O Layer 2 (detecção de nova compra pós-pedido) chama `processar_turno` recursivamente. O comentário no código dizia "recursão controlada — 1 nível", mas não havia nenhum código que garantisse isso. Se a nova sessão nascesse com estado corrompido, a condição do Layer 2 disparava novamente → loop infinito → stack overflow, derrubando o worker do webhook inteiro.
+
+**Antes:**
+```python
+def processar_turno(sessao_id, mensagem_texto, ...):
+    # sem nenhum guard de profundidade
+    ...
+    return processar_turno(nova_sessao.id, ...)  # pode lopar infinitamente
+```
+
+**Depois:**
+```python
+def processar_turno(sessao_id, mensagem_texto, ..., _profundidade: int = 0):
+    # Guard B5: nunca entrar em recursao infinita no Layer 2
+    if _profundidade > 1:
+        logger.error("processar_turno: profundidade maxima atingida (sessao=%s)", sessao_id)
+        return RespostaTurno(texto="Ocorreu um erro interno. Por favor, envie sua mensagem novamente.")
+    ...
+    return processar_turno(nova_sessao.id, ..., _profundidade=_profundidade + 1)
+```
+
+**Impacto nos callers:** zero — `_profundidade` tem valor padrão `0`, todos os callers externos continuam funcionando sem alteração.
+
+**Teste:**
+- `_profundidade=2` → guard ativa, banco e IA não são chamados ✅
+
+---
+
 ## Resumo Executivo
 
 | # | Bug | Risco | Status |
@@ -247,8 +320,8 @@ def resolver_ou_criar_cliente(telefone: str, nome: str | None = None) -> Cliente
 | B1 | Race condition `baixar_estoque_fisico` | Estoque negativo / desconto duplo | ✅ Corrigido `a25fa26` |
 | B2 | `registrar_fato` não atômico | Perda permanente de contexto da conversa | ✅ Corrigido `6ebd20a` |
 | B3 | `resolver_ou_criar_cliente` TOCTOU | Duplicação de cliente, histórico fragmentado | ✅ Corrigido `603584e` |
-| B4 | Dedup promotor por `pneu_id` apenas | Cliente perde item se pedir mesmo pneu em 2 posições | ⚠️ Pendente |
-| B5 | `processar_turno` recursivo sem guard | Stack overflow em loops | ⚠️ Pendente |
+| B4 | Dedup promotor por `pneu_id` apenas | Cliente perde item se pedir mesmo pneu em 2 posições | ✅ Corrigido `9ee23b4` |
+| B5 | `processar_turno` recursivo sem guard | Stack overflow em loops de estado corrompido | ✅ Corrigido `d492dac` |
 | B6 | Cancelamento não transacional | Pedido cancelado sem liberar reserva | ⚠️ Pendente |
 | B7 | `/internal/*` sem autenticação | Qualquer IP pode disparar ações internas | ⚠️ Pendente |
 | B8 | `_turno_async_locks` sem limpeza | Memory leak em produção | ⚠️ Pendente |
