@@ -66,7 +66,7 @@ ENVELOPE_IA_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "item_provisorio_id": {"type": ["string", "null"]},
-                    "acao":              {"type": "string", "enum": ["criar", "confirmar", "atualizar", "cancelar", "rejeitar"]},
+                    "acao":              {"type": "string"},
                     "dados": {
                         "anyOf": [
                             {

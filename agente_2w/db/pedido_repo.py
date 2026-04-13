@@ -83,41 +83,6 @@ def cancelar_pedido(pedido_id: UUID) -> Pedido:
         raise ErroDeAtualizacao("pedido", f"{pedido_id}: {e}") from e
 
 
-def atualizar_status_pedido(pedido_id: UUID, status: str) -> Pedido:
-    """Atualiza o status logistico do pedido."""
-    try:
-        resultado = (
-            supabase.table("pedido")
-            .update({"status_pedido": status})
-            .eq("id", str(pedido_id))
-            .execute()
-        )
-        logger.info("Pedido %s status -> %s", pedido_id, status)
-        return Pedido(**resultado.data[0])
-    except Exception as e:
-        raise ErroDeAtualizacao("pedido", f"{pedido_id}: {e}") from e
-
-
-def buscar_pedido_por_chatwoot_conv(conv_id: int) -> Pedido | None:
-    """Busca pedido pela conversa do Chatwoot (via sessao_chat.chatwoot_conv_id)."""
-    try:
-        sess = (
-            supabase.table("sessao_chat")
-            .select("id")
-            .eq("chatwoot_conv_id", conv_id)
-            .order("criado_em", desc=True)
-            .limit(1)
-            .maybe_single()
-            .execute()
-        )
-        if sess is None or sess.data is None:
-            return None
-        return buscar_pedido_por_sessao(UUID(sess.data["id"]))
-    except Exception:
-        logger.exception("Falha ao buscar pedido por conv_id=%s", conv_id)
-        return None
-
-
 def criar_item_pedido(dados: ItemPedidoCreate) -> ItemPedido:
     try:
         resultado = (

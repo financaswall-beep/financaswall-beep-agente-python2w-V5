@@ -69,11 +69,8 @@ class FormaPagamento(str, Enum):
 
 class StatusPedido(str, Enum):
     confirmado = "confirmado"
-    separando = "separando"
-    em_transito = "em_transito"
-    entregue = "entregue"
-    nao_efetuada = "nao_efetuada"
     cancelado = "cancelado"
+    entregue = "entregue"
 
 
 class Confianca(str, Enum):

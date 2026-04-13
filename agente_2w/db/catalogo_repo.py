@@ -199,19 +199,3 @@ def decrementar_reservado(pneu_id: UUID, quantidade: int) -> None:
         logger.debug("Reservado -%d para pneu %s", quantidade, pneu_id)
     except Exception:
         logger.exception("Falha ao decrementar reservado pneu %s", pneu_id)
-
-
-def baixar_estoque_fisico(pneu_id: UUID, quantidade: int) -> None:
-    """Baixa estoque fisico apos entrega: disponivel -= qty E reservado -= qty.
-
-    Usa RPC atomica no Postgres para evitar race condition entre
-    entregas simultaneas (mesmo padrao de incrementar/decrementar_reservado).
-    """
-    try:
-        supabase.rpc("baixar_estoque_fisico", {
-            "p_pneu_id": str(pneu_id),
-            "p_quantidade": quantidade,
-        }).execute()
-        logger.info("Baixa fisica atomica pneu %s: -%d", pneu_id, quantidade)
-    except Exception:
-        logger.exception("Falha ao baixar estoque fisico pneu %s", pneu_id)

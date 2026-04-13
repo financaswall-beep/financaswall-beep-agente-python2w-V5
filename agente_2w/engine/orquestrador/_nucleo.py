@@ -857,17 +857,12 @@ def processar_turno(
     imagens: list[str] | None = None,
     chatwoot_conv_id: int | None = None,
     chatwoot_contact_id: int | None = None,
-    _profundidade: int = 0,
 ) -> RespostaTurno:
     """Processa um turno completo da conversa.
 
     Retorna RespostaTurno com texto + URLs de fotos dos pneus encontrados.
     Retrocompatível com str (print, in, f-string funcionam).
     """
-    # Guard B5: nunca entrar em recursao infinita no Layer 2
-    if _profundidade > 1:
-        logger.error("processar_turno: profundidade maxima de recursao atingida (sessao=%s)", sessao_id)
-        return RespostaTurno(texto="Ocorreu um erro interno. Por favor, envie sua mensagem novamente.")
     agora = criado_em or datetime.now(timezone.utc)
 
     # --- 0a. Rejeitar mensagem vazia ---
@@ -1241,7 +1236,7 @@ def processar_turno(
             if sessao_pre.cliente_id:
                 sessao_repo.vincular_cliente(nova_sessao.id, sessao_pre.cliente_id)
             logger.info("Layer 2: nova sessao %s criada. Reprocessando mensagem.", nova_sessao.id)
-            # Reprocessar a mensagem na nova sessao (recursao controlada — max 1 nivel, guard B5)
+            # Reprocessar a mensagem na nova sessao (recursao controlada — 1 nivel)
             return processar_turno(
                 nova_sessao.id,
                 mensagem_texto,
@@ -1250,7 +1245,6 @@ def processar_turno(
                 imagens=imagens,
                 chatwoot_conv_id=chatwoot_conv_id,
                 chatwoot_contact_id=chatwoot_contact_id,
-                _profundidade=_profundidade + 1,
             )
 
     # --- 11. Avaliar transicao de etapa ---
