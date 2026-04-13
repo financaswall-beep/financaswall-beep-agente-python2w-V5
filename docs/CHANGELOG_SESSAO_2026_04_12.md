@@ -14,7 +14,7 @@ Sessão focada em **segurança e integridade de dados**: correção de três rac
 | Diretório local V5 | `C:\agente-python2w-V5` |
 | Repositório V4 (backup estável) | `https://github.com/financaswall-beep/financaswall-beep-agente-python2w-V4.git` |
 | Commit inicial V5 | `a25fa26` (clone exato do V4) |
-| Commit final desta sessão | `d1a5cd1` |
+| Commit final desta sessão | `670ab7a` |
 
 ---
 
@@ -244,6 +244,8 @@ def resolver_ou_criar_cliente(telefone: str, nome: str | None = None) -> Cliente
 
 | Commit | Descrição |
 |---|---|
+| `a755975` | fix(B7): middleware autenticacao /internal/* |
+| `670ab7a` | test(B7): teste de autenticacao |
 | `9ee23b4` | fix(B4): dedup promotor por pneu_id+posicao |
 | `d492dac` | fix(B5): guard de profundidade em processar_turno |
 | `f934aa1` | docs: changelog sessão |
@@ -313,6 +315,52 @@ def processar_turno(sessao_id, mensagem_texto, ..., _profundidade: int = 0):
 
 ---
 
+### B7 — Endpoints `/internal/*` sem Autenticação
+
+**Commit:** `a755975`  
+**Arquivo:** `webhook_server.py`  
+**Teste:** `tests/test_b7_auth_internal.py`
+
+**Problema:**  
+O servidor expõe 7 endpoints de controle interno sem nenhuma autenticação:
+- `POST /internal/auto-resolve?horas=0` → fecha **todas** as conversas ativas
+- `POST /internal/stop-bot/{id}` → para o bot em qualquer conversa
+- `POST /internal/sync-etapa`, `/sync-pedido`, `/devolver-ao-bot`, etc.
+
+Qualquer pessoa com o IP do servidor (exposto via Coolify na internet) podia chamar esses endpoints livremente.
+
+**Solução:**  
+Middleware FastAPI que intercepta todas as requisições a `/internal/*` e verifica o header `Authorization: Bearer <token>`.
+
+```python
+_INTERNAL_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
+
+@app.middleware("http")
+async def _auth_internal(request: Request, call_next):
+    if request.url.path.startswith("/internal/"):
+        if not _INTERNAL_TOKEN:
+            return JSONResponse(status_code=503, content={"detail": "Servico nao configurado"})
+        auth = request.headers.get("Authorization", "")
+        token = auth.removeprefix("Bearer ").strip()
+        if not hmac.compare_digest(token, _INTERNAL_TOKEN):  # resistente a timing attack
+            logger.warning("Acesso nao autorizado a %s (IP=%s)", request.url.path, request.client.host)
+            return JSONResponse(status_code=401, content={"detail": "Nao autorizado"})
+    return await call_next(request)
+```
+
+**Token configurado em:**
+- Coolify: variável de ambiente `INTERNAL_API_TOKEN`
+- `.env` local: idem
+- `.env.example`: atualizado com instrução de geração
+
+**Testes (4 cenários):**
+- Sem token → 401 ✅
+- Token errado → 401 ✅
+- Token correto → passa (200) ✅
+- `/health` sem token → não bloqueado ✅
+
+---
+
 ## Resumo Executivo
 
 | # | Bug | Risco | Status |
@@ -322,7 +370,8 @@ def processar_turno(sessao_id, mensagem_texto, ..., _profundidade: int = 0):
 | B3 | `resolver_ou_criar_cliente` TOCTOU | Duplicação de cliente, histórico fragmentado | ✅ Corrigido `603584e` |
 | B4 | Dedup promotor por `pneu_id` apenas | Cliente perde item se pedir mesmo pneu em 2 posições | ✅ Corrigido `9ee23b4` |
 | B5 | `processar_turno` recursivo sem guard | Stack overflow em loops de estado corrompido | ✅ Corrigido `d492dac` |
-| B6 | Cancelamento não transacional | Pedido cancelado sem liberar reserva | ⚠️ Pendente |
+| B6 | Cancelamento não transacional | Pedido cancelado sem liberar reserva | ⏭️ Pulado (ocorrência rara) |
+| B7 | `/internal/*` sem autenticação | Qualquer IP pode fechar conversas ou parar o bot | ✅ Corrigido `a755975` |
 | B7 | `/internal/*` sem autenticação | Qualquer IP pode disparar ações internas | ⚠️ Pendente |
 | B8 | `_turno_async_locks` sem limpeza | Memory leak em produção | ⚠️ Pendente |
 | B9 | Campo `acao` sem enum no schema | IA pode retornar string inválida | ⚠️ Pendente |
