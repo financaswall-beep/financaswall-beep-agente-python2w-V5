@@ -56,10 +56,23 @@ def buscar_cliente_por_telefone(telefone: str) -> Cliente | None:
 
 
 def resolver_ou_criar_cliente(telefone: str, nome: str | None = None) -> Cliente:
-    existente = buscar_cliente_por_telefone(telefone)
-    if existente is not None:
-        return existente
-    return criar_cliente(ClienteCreate(telefone=telefone, nome=nome))
+    """Busca ou cria cliente de forma atômica via RPC.
+
+    Usa INSERT ... ON CONFLICT (telefone) DO NOTHING para garantir que
+    dois workers simultâneos para o mesmo telefone nunca criem duplicatas.
+    """
+    try:
+        resultado = supabase.rpc(
+            "resolver_ou_criar_cliente_atomico",
+            {"p_telefone": telefone, "p_nome": nome},
+        ).execute()
+        if not resultado.data:
+            raise ErroDeInsercao(_TABELA, f"RPC retornou vazio para telefone={telefone}")
+        return Cliente(**resultado.data[0])
+    except ErroDeInsercao:
+        raise
+    except Exception as e:
+        raise ErroDeInsercao(_TABELA, f"telefone={telefone}: {e}") from e
 
 
 def atualizar_cliente(cliente_id: UUID, campos: dict) -> Cliente:
