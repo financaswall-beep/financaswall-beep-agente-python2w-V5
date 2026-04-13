@@ -12,7 +12,6 @@ import os
 import hmac
 import hashlib
 import json
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -43,12 +42,10 @@ with patch("agente_2w.db.client.supabase"), \
     from webhook_server import app, _verificar_assinatura, CHATWOOT_WEBHOOK_SECRET
 
 
-def _assinar(body: bytes, secret: str, ts: str | None = None) -> tuple[str, str]:
-    """Gera timestamp e assinatura HMAC valida."""
-    ts = ts or str(int(time.time()))
-    message = f"{ts}.".encode() + body
-    sig = "sha256=" + hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
-    return ts, sig
+def _assinar(body: bytes, secret: str) -> str:
+    """Gera assinatura HMAC valida no formato Chatwoot (apenas body, sem timestamp)."""
+    sig = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return sig
 
 
 # ---------- testes de _verificar_assinatura diretamente ----------
@@ -59,8 +56,8 @@ def test_assinatura_correta_passa():
     ws.CHATWOOT_WEBHOOK_SECRET = SECRET
     try:
         body = b'{"event": "test"}'
-        ts, sig = _assinar(body, SECRET)
-        assert ws._verificar_assinatura(body, ts, sig) is True
+        sig = _assinar(body, SECRET)
+        assert ws._verificar_assinatura(body, sig) is True
         print("  [OK] Assinatura correta \u2192 True")
     finally:
         ws.CHATWOOT_WEBHOOK_SECRET = original
@@ -68,15 +65,14 @@ def test_assinatura_correta_passa():
 
 def test_assinatura_errada_falha():
     body = b'{"event": "test"}'
-    ts, _ = _assinar(body, SECRET)
-    assert _verificar_assinatura(body, ts, "sha256=assinatura-invalida") is False
+    assert _verificar_assinatura(body, "sha256=assinatura-invalida") is False
     print("  [OK] Assinatura errada → False")
 
 
 def test_sem_headers_falha():
     body = b'{"event": "test"}'
-    assert _verificar_assinatura(body, "", "") is False
-    print("  [OK] Sem headers HMAC → False")
+    assert _verificar_assinatura(body, "") is False
+    print("  [OK] Sem signature header → False")
 
 
 def test_secret_ausente_bloqueia():
@@ -86,7 +82,7 @@ def test_secret_ausente_bloqueia():
     ws.CHATWOOT_WEBHOOK_SECRET = ""
     try:
         body = b'{"event": "test"}'
-        result = ws._verificar_assinatura(body, "12345", "sha256=qualquer")
+        result = ws._verificar_assinatura(body, "sha256=qualquer")
         assert result is False, f"Esperava False, got {result}"
         print("  [OK] Secret ausente → False (bloqueado)")
     finally:
@@ -116,7 +112,7 @@ def test_endpoint_sem_assinatura_retorna_401():
 
 def test_endpoint_com_assinatura_valida_passa():
     body = _payload_valido()
-    ts, sig = _assinar(body, SECRET)
+    sig = _assinar(body, SECRET)
     import webhook_server as ws
     original = ws.CHATWOOT_WEBHOOK_SECRET
     ws.CHATWOOT_WEBHOOK_SECRET = SECRET
@@ -131,7 +127,6 @@ def test_endpoint_com_assinatura_valida_passa():
                 content=body,
                 headers={
                     "x-chatwoot-signature": sig,
-                    "x-chatwoot-timestamp": ts,
                     "Content-Type": "application/json",
                 },
             )
