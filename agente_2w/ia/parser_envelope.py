@@ -77,6 +77,24 @@ def parse_resposta(
             resposta_bruta,
         )
 
+    # Guardrail: mensagem_cliente não pode ser JSON bruto (alucinação do modelo).
+    # Quando acontece, o modelo colocou o envelope inteiro como valor do campo.
+    # Tenta extrair o mensagem_cliente interno; se não conseguir, força retry.
+    msg = envelope.mensagem_cliente or ""
+    if msg.strip().startswith("{"):
+        try:
+            interno = json.loads(msg)
+            texto_limpo = interno.get("mensagem_cliente", "")
+            if texto_limpo and not texto_limpo.strip().startswith("{"):
+                envelope.mensagem_cliente = texto_limpo
+            else:
+                raise ValueError("mensagem_cliente interna também é JSON")
+        except Exception:
+            raise ParseError(
+                "mensagem_cliente contém JSON bruto em vez de texto ao cliente",
+                resposta_bruta,
+            )
+
     erros = validar_envelope(envelope, contexto)
 
     return envelope, erros
