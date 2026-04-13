@@ -290,12 +290,14 @@ def promover_para_pedido(sessao_id: UUID) -> Pedido:
         if i.status_item in _STATUS_PROMOVIVEL and i.pneu_id is not None
     ]
 
-    # Safety net: deduplicar por pneu_id — manter apenas o item mais recente.
+    # Safety net: deduplicar por (pneu_id, posicao) — manter apenas o item mais recente.
+    # Chave inclui posicao para que o mesmo pneu pedido em dianteira E traseira
+    # nao seja eliminado como duplicata (B4).
     # Evita que itens orfaos de conversas anteriores (mesma sessao longa)
     # sejam promovidos junto com o item correto.
     vistos: dict[str, object] = {}
     for item in itens_validados:
-        chave = str(item.pneu_id)
+        chave = f"{item.pneu_id}|{item.posicao_moto or ''}"
         if chave in vistos:
             antigo = vistos[chave]
             # Manter o mais recente (criado_em maior)
