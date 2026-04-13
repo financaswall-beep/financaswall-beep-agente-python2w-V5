@@ -202,22 +202,16 @@ def decrementar_reservado(pneu_id: UUID, quantidade: int) -> None:
 
 
 def baixar_estoque_fisico(pneu_id: UUID, quantidade: int) -> None:
-    """Baixa estoque fisico apos entrega: disponivel -= qty E reservado -= qty."""
+    """Baixa estoque fisico apos entrega: disponivel -= qty E reservado -= qty.
+
+    Usa RPC atomica no Postgres para evitar race condition entre
+    entregas simultaneas (mesmo padrao de incrementar/decrementar_reservado).
+    """
     try:
-        estoque = buscar_estoque_por_pneu(pneu_id)
-        if not estoque:
-            logger.warning("Nenhum registro de estoque para pneu %s", pneu_id)
-            return
-        novo_disponivel = max(0, estoque.quantidade_disponivel - quantidade)
-        novo_reservado = max(0, estoque.reservado - quantidade)
-        supabase.table("estoque").update({
-            "quantidade_disponivel": novo_disponivel,
-            "reservado": novo_reservado,
-        }).eq("pneu_id", str(pneu_id)).execute()
-        logger.info(
-            "Baixa fisica pneu %s: disponivel=%d->%d, reservado=%d->%d",
-            pneu_id, estoque.quantidade_disponivel, novo_disponivel,
-            estoque.reservado, novo_reservado,
-        )
+        supabase.rpc("baixar_estoque_fisico", {
+            "p_pneu_id": str(pneu_id),
+            "p_quantidade": quantidade,
+        }).execute()
+        logger.info("Baixa fisica atomica pneu %s: -%d", pneu_id, quantidade)
     except Exception:
         logger.exception("Falha ao baixar estoque fisico pneu %s", pneu_id)
