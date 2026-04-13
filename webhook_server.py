@@ -191,8 +191,27 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Agente 2W Pneus - Webhook", lifespan=lifespan)
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Middleware de autenticacao para endpoints /internal/*  (B7)
 # ---------------------------------------------------------------------------
+
+_INTERNAL_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
+
+
+@app.middleware("http")
+async def _auth_internal(request: Request, call_next):
+    """Rejeita chamadas a /internal/* sem token valido no header Authorization."""
+    if request.url.path.startswith("/internal/"):
+        if not _INTERNAL_TOKEN:
+            logger.warning("INTERNAL_API_TOKEN nao configurado — bloqueando acesso a %s", request.url.path)
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=503, content={"detail": "Servico nao configurado"})
+        auth = request.headers.get("Authorization", "")
+        token = auth.removeprefix("Bearer ").strip()
+        if not hmac.compare_digest(token, _INTERNAL_TOKEN):
+            logger.warning("Acesso nao autorizado a %s (IP=%s)", request.url.path, request.client.host if request.client else "?")
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=401, content={"detail": "Nao autorizado"})
+    return await call_next(request)
 
 
 def _normalizar_telefone(raw: str) -> str:
