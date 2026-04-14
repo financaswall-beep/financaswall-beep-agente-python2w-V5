@@ -839,7 +839,10 @@ import re as _re
 _REGEX_PEDIU_FOTO = _re.compile(
     r"(?:fot[oa]|fotinha|imagem|ver o pneu|ver ele|mostra.{0,6}pneu|como .{0,6} pneu|"
     r"manda.{0,10}foto|quero ver|tem como ver|deixa eu ver|me mostra|posso ver|"
-    r"cadê a foto|cade a foto|manda.{0,6}imagem)",
+    r"cadê a foto|cade a foto|manda.{0,6}imagem|"
+    r"manda\s+a[ií]\b|manda\s+ele\b|manda\s+as?\b|"
+    r"cad[eê]\??$|cade\??$|cadê\??$|onde\s+(t[aá]|ficou|est[aá])\b|"
+    r"n[aã]o\s+(chegou|apareceu|veio|recebi)\b|reenv[ia])",
     _re.IGNORECASE,
 )
 
