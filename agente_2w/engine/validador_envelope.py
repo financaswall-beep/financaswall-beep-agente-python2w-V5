@@ -123,6 +123,27 @@ def validar_envelope(
                 "sem endereco_entrega registrado"
             )
 
+    # 9. endereco_entrega sendo registrado deve ter pelo menos rua + numero
+    for fato in list(envelope.fatos_observados) + list(envelope.fatos_inferidos):
+        if fato.chave == ChaveContexto.ENDERECO_ENTREGA:
+            valor = fato.valor
+            if isinstance(valor, dict):
+                tem_rua = valor.get("logradouro") or valor.get("rua")
+                tem_numero = valor.get("numero")
+                if not tem_rua or not tem_numero:
+                    erros.append(
+                        "endereco_entrega registrado como dict sem logradouro ou numero — "
+                        "colete rua + numero + bairro antes de registrar"
+                    )
+            elif isinstance(valor, str):
+                import re as _re
+                tem_numero = bool(_re.search(r"\d", valor))
+                if not tem_numero or len(valor.strip()) < 10:
+                    erros.append(
+                        f"endereco_entrega '{valor}' parece incompleto — "
+                        "deve conter rua + numero (ex: 'Rua das Flores, 123, Bangu')"
+                    )
+
     # 10. Mensagem para o cliente nao pode ser vazia
     if not envelope.mensagem_cliente or not envelope.mensagem_cliente.strip():
         erros.append("mensagem_cliente vazia")

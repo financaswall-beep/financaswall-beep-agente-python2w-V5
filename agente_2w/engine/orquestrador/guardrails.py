@@ -11,7 +11,7 @@ from agente_2w.enums.enums import EtapaFluxo
 logger = logging.getLogger(__name__)
 
 
-def _aplicar_guardrail(envelope, etapa_atual):
+def _aplicar_guardrail(envelope, etapa_atual, pedido_sessao_atual=None):
     """Guardrail: corrige acoes conflitantes no envelope antes do processamento.
 
     Regras:
@@ -19,6 +19,7 @@ def _aplicar_guardrail(envelope, etapa_atual):
     2. converter_em_pedido + cancelar_pedido = contradicao → manter cancelar_pedido
     3. finalizar_itens + adicionar_outro_item = contradicao → manter finalizar_itens
     4. rejeitar_item + confirmar_item = contradicao → manter rejeitar_item
+    5. converter_em_pedido quando pedido ja existe = erro → remover
     """
     acoes = list(envelope.acoes_sugeridas)
     etapa = envelope.etapa_atual
@@ -65,6 +66,14 @@ def _aplicar_guardrail(envelope, etapa_atual):
                 "Guardrail alerta: finalizar_itens com mensagem de confirmacao "
                 "mas sem mudancas_itens:criar — safety net vai compensar"
             )
+
+    # Regra 5: converter_em_pedido quando pedido ja existe nesta sessao
+    if pedido_sessao_atual and "converter_em_pedido" in acoes:
+        acoes.remove("converter_em_pedido")
+        logger.warning(
+            "Guardrail: converter_em_pedido removido — pedido #%s ja existe nesta sessao",
+            getattr(pedido_sessao_atual, "numero_pedido", "?"),
+        )
 
     envelope.acoes_sugeridas = acoes
     envelope.etapa_atual = etapa

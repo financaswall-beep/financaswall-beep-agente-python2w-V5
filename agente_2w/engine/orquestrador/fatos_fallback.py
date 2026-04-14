@@ -39,6 +39,25 @@ _KEYWORDS_TIPO_ENTREGA = [
     ("delivery", "entrega"),
 ]
 
+_RE_NOME_CLIENTE = re.compile(
+    r"(?:meu nome [eé]|me chamo|sou o|sou a|pode chamar de|pode me chamar de|meu nome:)\s+"
+    r"([A-Za-zÀ-ÖØ-öø-ÿ]{2,}(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ]{2,}){0,3})",
+    re.IGNORECASE,
+)
+_STOP_NOMES = frozenset({
+    "Sim", "Nao", "Ok", "Certo", "Bom", "Boa", "Oi", "Ola", "Obrigado", "Obrigada",
+})
+
+
+def _extrair_nome_fallback(texto: str) -> str | None:
+    """Extrai nome do cliente de frases como 'meu nome é João', 'sou o Carlos'."""
+    m = _RE_NOME_CLIENTE.search(texto)
+    if m:
+        nome = m.group(1).strip().title()
+        if nome not in _STOP_NOMES and len(nome) >= 3:
+            return nome
+    return None
+
 
 def _tem_negacao_antes(texto: str, keyword: str) -> bool:
     """Verifica se ha negacao proxima antes da keyword — evita falso positivo.
@@ -98,6 +117,22 @@ def _extrair_fatos_estruturados_fallback(
                         "Fallback: tipo_entrega extraido da mensagem — '%s'", valor
                     )
                     break
+
+        # nome_cliente — so registra se ainda nao existe
+        if not contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.NOME_CLIENTE):
+            nome = _extrair_nome_fallback(mensagem)
+            if nome:
+                contexto_repo.registrar_fato(ContextoConversaCreate(
+                    sessao_chat_id=sessao_id,
+                    chave=ChaveContexto.NOME_CLIENTE,
+                    valor_texto=nome,
+                    valor_json=None,
+                    tipo_de_verdade=TipoDeVerdade.observado,
+                    nivel_confirmacao=NivelConfirmacao.nenhum,
+                    fonte=OrigemContexto.backend,
+                    mensagem_chat_id=mensagem_id,
+                ))
+                logger.info("Fallback: nome_cliente extraido da mensagem — '%s'", nome)
 
         # bairro / municipio — resolve via cache bairro_municipio_cache
         _resolver_bairro_fallback(sessao_id, mensagem, mensagem_id)

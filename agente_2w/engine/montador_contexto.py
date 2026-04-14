@@ -315,6 +315,31 @@ def montar_contexto(sessao_id: UUID) -> ContextoExecutavel:
             "ou registre alteracoes se solicitado."
         )
 
+    # Alerta: estoque critico (quantidade <= 3) — LLM menciona de passagem
+    fato_pneus_raw = next(
+        (f for f in fatos_db if f.chave == ChaveContexto.ULTIMOS_PNEUS_ENCONTRADOS), None
+    )
+    if fato_pneus_raw and fato_pneus_raw.valor_json:
+        for _pneu in fato_pneus_raw.valor_json:
+            try:
+                _qtd = int(
+                    _pneu.get("quantidade_estoque")
+                    or _pneu.get("estoque")
+                    or 999
+                )
+            except (TypeError, ValueError):
+                _qtd = 999
+            if _qtd <= 3:
+                _nome = (
+                    _pneu.get("descricao_comercial")
+                    or _pneu.get("modelo")
+                    or str(_pneu.get("pneu_id", ""))
+                )
+                alertas.append(
+                    f"ESTOQUE CRITICO: '{_nome}' tem apenas {_qtd} unidade(s) — "
+                    "mencione de passagem: 'Esse aqui to com poucas unidades, ta.'"
+                )
+
     return ContextoExecutavel(
         sessao=sessao_ctx,
         cliente=cliente_ctx,

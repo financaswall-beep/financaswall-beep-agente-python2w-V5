@@ -995,7 +995,7 @@ def processar_turno(
         return RespostaTurno(texto=MENSAGEM_FALHA_SEGURA)
 
     # --- 5b. Guardrail: corrigir acoes conflitantes antes de qualquer processamento ---
-    envelope = _aplicar_guardrail(envelope, contexto.sessao.etapa_atual)
+    envelope = _aplicar_guardrail(envelope, contexto.sessao.etapa_atual, contexto.pedido_sessao_atual)
 
     if pneus_encontrados:
         logger.info(
