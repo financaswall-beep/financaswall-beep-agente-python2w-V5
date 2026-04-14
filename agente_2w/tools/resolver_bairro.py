@@ -218,13 +218,19 @@ def resolver_bairro_municipio(
         return None, municipio_direto, None
 
     # 1. Consulta cache
-    cache = bairro_municipio_cache_repo.buscar(termo)
-    if cache is not None:
+    resultados_cache = bairro_municipio_cache_repo.buscar(termo)
+    if len(resultados_cache) == 1:
+        r = resultados_cache[0]
         logger.info(
             "Cache hit para '%s': bairro=%s, municipio=%s",
-            termo, cache["bairro"], cache["municipio"],
+            termo, r["bairro"], r["municipio"],
         )
-        return cache["bairro"], cache["municipio"], None
+        return r["bairro"], r["municipio"], None
+    elif len(resultados_cache) > 1:
+        # Ambíguo no cache — bairro existe em múltiplos municípios
+        municipios_possiveis = [r["municipio"] for r in resultados_cache if r["municipio"]]
+        logger.info("Cache ambíguo para '%s': %s", termo, municipios_possiveis)
+        return resultados_cache[0]["bairro"], None, municipios_possiveis
 
     # 2. Cache miss → web_search
     logger.info("Cache miss para '%s' — chamando web_search", termo)
