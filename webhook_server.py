@@ -162,11 +162,16 @@ async def _auto_resolver_conversas(horas: int = 72) -> int:
 
 
 async def _recovery_cliente_perdido() -> int:
-    """Envia mensagem de recovery para sessoes ativas sem resposta entre 2h e 2h35min.
+    """Envia mensagem de recovery personalizada por etapa do funil.
 
-    A janela de 35min garante que cada sessao receba a mensagem exatamente uma vez:
-    o scheduler roda a cada 30min, entao qualquer sessao que cruzar a marca de 2h
-    sera capturada em exatamente um ciclo.
+    Janelas de inatividade por etapa (35min cada, sem sobreposicao):
+      - entrega_pagamento:       30min a  65min
+      - confirmacao_item:        65min a 100min
+      - oferta:                 100min a 135min
+      - identificacao / busca:  135min a 170min
+
+    Sessoes com pedido criado sao ignoradas (nao sao cliente perdido).
+    O scheduler roda a cada 30min — cada sessao cai em exatamente um ciclo.
 
     Retorna numero de clientes contactados.
     """
@@ -174,13 +179,24 @@ async def _recovery_cliente_perdido() -> int:
     from agente_2w.db.client import supabase
 
     agora = datetime.now(timezone.utc)
-    corte_max = (agora - timedelta(hours=2)).isoformat()
-    corte_min = (agora - timedelta(hours=2, minutes=35)).isoformat()
+
+    # Janela ampla: 30min a 170min de inatividade (cobre todas as etapas)
+    corte_max = (agora - timedelta(minutes=30)).isoformat()
+    corte_min = (agora - timedelta(minutes=170)).isoformat()
+
+    # Janelas por etapa: (min_minutos, max_minutos, mensagem)
+    _JANELAS = {
+        "entrega_pagamento": (30, 65, "Oi! Faltou pouco pra fechar. Quer concluir o pedido?"),
+        "confirmacao_item":  (65, 100, "Oi! Você estava quase finalizando a compra de um pneu. Posso te ajudar a concluir?"),
+        "oferta":            (100, 135, "Oi! Você estava vendo pneus aqui comigo. Ainda tem interesse?"),
+        "identificacao":     (135, 170, "Olá! Ainda posso te ajudar com sua busca por pneus? É só me chamar aqui 🙂"),
+        "busca":             (135, 170, "Olá! Ainda posso te ajudar com sua busca por pneus? É só me chamar aqui 🙂"),
+    }
 
     try:
         res = (
             supabase.table("sessao_chat")
-            .select("id, chatwoot_conv_id")
+            .select("id, chatwoot_conv_id, etapa_atual, ultima_interacao_em")
             .not_.is_("chatwoot_conv_id", "null")
             .neq("status_sessao", StatusSessao.fechada.value)
             .lt("ultima_interacao_em", corte_max)
@@ -195,13 +211,42 @@ async def _recovery_cliente_perdido() -> int:
     contactados = 0
     for s in sessoes:
         try:
-            conv_id = s["chatwoot_conv_id"]
-            await _enviar_mensagem_chatwoot(
-                conv_id,
-                "Ol\u00e1! Ainda posso te ajudar com sua busca por pneus? \u00c9 s\u00f3 me chamar aqui \U0001f642",
+            # Sessao com pedido criado nao e cliente perdido — pular
+            pedidos = (
+                supabase.table("pedido")
+                .select("id")
+                .eq("sessao_chat_id", s["id"])
+                .limit(1)
+                .execute()
             )
+            if pedidos.data:
+                logger.debug("Recovery ignorado: sessao=%s ja tem pedido", s["id"])
+                continue
+
+            etapa = s.get("etapa_atual", "identificacao")
+            janela = _JANELAS.get(etapa)
+            if not janela:
+                logger.debug("Recovery ignorado: sessao=%s etapa=%s sem janela", s["id"], etapa)
+                continue
+
+            min_min, max_min, mensagem = janela
+
+            # Calcular inatividade real e verificar se cai na janela da etapa
+            ultima = datetime.fromisoformat(s["ultima_interacao_em"])
+            if ultima.tzinfo is None:
+                ultima = ultima.replace(tzinfo=timezone.utc)
+            inativo_min = (agora - ultima).total_seconds() / 60.0
+
+            if not (min_min <= inativo_min < max_min):
+                continue
+
+            conv_id = s["chatwoot_conv_id"]
+            await _enviar_mensagem_chatwoot(conv_id, mensagem)
             await asyncio.to_thread(chatwoot_sync.adicionar_label, conv_id, "cliente_perdido")
-            logger.info("Recovery enviado: conv=%s sessao=%s", conv_id, s["id"])
+            logger.info(
+                "Recovery enviado: conv=%s sessao=%s etapa=%s inativo=%.0fmin",
+                conv_id, s["id"], etapa, inativo_min,
+            )
             contactados += 1
         except Exception:
             logger.warning("Falha ao enviar recovery para conv=%s", s.get("chatwoot_conv_id"), exc_info=True)

@@ -29,7 +29,7 @@ TIMEOUT_BLOQUEADA_HORAS: int = 2
 
 # Horas para manter sessao aberta apos pedido criado.
 # Permite o cliente consultar status, alterar endereco etc.
-TIMEOUT_POS_PEDIDO_HORAS: int = 48
+TIMEOUT_POS_PEDIDO_HORAS: int = 24
 
 # Etapas com contexto acumulado suficiente para valer registrar a situacao
 _ETAPAS_COM_CONTEXTO: frozenset[EtapaFluxo] = frozenset({
