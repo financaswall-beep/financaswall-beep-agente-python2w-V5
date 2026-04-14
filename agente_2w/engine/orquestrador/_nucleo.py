@@ -843,10 +843,20 @@ _REGEX_PEDIU_FOTO = _re.compile(
     _re.IGNORECASE,
 )
 
+_REGEX_PEDIU_VIDEO = _re.compile(
+    r"(?:v[ií]deo|video|manda.{0,10}v[ií]deo|quero ver.{0,10}v[ií]deo|tem v[ií]deo)",
+    _re.IGNORECASE,
+)
+
 
 def _cliente_pediu_foto(mensagem: str) -> bool:
     """Retorna True se a mensagem do cliente indica pedido de foto/imagem."""
     return bool(_REGEX_PEDIU_FOTO.search(mensagem))
+
+
+def _cliente_pediu_video(mensagem: str) -> bool:
+    """Retorna True se a mensagem do cliente indica pedido de video."""
+    return bool(_REGEX_PEDIU_VIDEO.search(mensagem))
 
 
 def processar_turno(
@@ -1426,12 +1436,33 @@ def processar_turno(
     )
     _persistir_saida(sessao_id, mensagem_final)
 
-    # --- 14. Retornar mensagem + fotos (apenas se cliente solicitou) ---
+    # --- 14. Retornar mensagem + fotos + videos (apenas se cliente solicitou) ---
     fotos_para_enviar: list[str] = []
-    if _cliente_pediu_foto(mensagem_texto) and pneus_encontrados:
-        fotos_para_enviar = [
-            p["foto_url"]
-            for p in pneus_encontrados
-            if p.get("foto_url")
-        ]
-    return RespostaTurno(texto=mensagem_final, fotos=fotos_para_enviar)
+    videos_para_enviar: list[str] = []
+
+    pediu_foto = _cliente_pediu_foto(mensagem_texto)
+    pediu_video = _cliente_pediu_video(mensagem_texto)
+
+    if (pediu_foto or pediu_video) and pneus_encontrados:
+        from agente_2w.db.foto_pneu_repo import buscar_foto_frontal, buscar_video
+        for p in pneus_encontrados:
+            pneu_id_midia = p.get("pneu_id")
+            if not pneu_id_midia:
+                continue
+            try:
+                pneu_uuid_midia = UUID(str(pneu_id_midia))
+                if pediu_foto:
+                    # Envia principal + frontal (se existirem)
+                    if p.get("foto_url"):
+                        fotos_para_enviar.append(p["foto_url"])
+                    frontal = buscar_foto_frontal(pneu_uuid_midia)
+                    if frontal and frontal != p.get("foto_url"):
+                        fotos_para_enviar.append(frontal)
+                if pediu_video:
+                    video_url = buscar_video(pneu_uuid_midia)
+                    if video_url:
+                        videos_para_enviar.append(video_url)
+            except Exception:
+                logger.exception("Erro ao buscar midia do pneu %s", pneu_id_midia)
+
+    return RespostaTurno(texto=mensagem_final, fotos=fotos_para_enviar, videos=videos_para_enviar)

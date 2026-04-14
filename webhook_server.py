@@ -871,6 +871,10 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                 for foto_url in resposta.fotos or []:
                     await _enviar_foto_chatwoot(conversation_id, foto_url)
 
+                # Enviar videos
+                for video_url in resposta.videos or []:
+                    await _enviar_foto_chatwoot(conversation_id, video_url)
+
             except Exception as e:
                 logger.error("Erro ao processar mensagem: %s", e, exc_info=True)
                 await _enviar_mensagem_chatwoot(conversation_id, MENSAGEM_FALHA_SEGURA)

@@ -17,6 +17,7 @@ class RespostaTurno:
 
     texto: str
     fotos: list[str] = field(default_factory=list)
+    videos: list[str] = field(default_factory=list)
 
     def __str__(self) -> str:
         return self.texto
