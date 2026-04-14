@@ -835,31 +835,79 @@ def _avaliar_transicao(sessao_id: UUID, etapa_atual, etapa_proposta) -> None:
 
 
 import re as _re
+import unicodedata as _unicodedata
 
 _REGEX_PEDIU_FOTO = _re.compile(
-    r"(?:fot[oa]|fotinha|imagem|ver o pneu|ver ele|mostra.{0,6}pneu|como .{0,6} pneu|"
-    r"manda.{0,10}foto|quero ver|tem como ver|deixa eu ver|me mostra|posso ver|"
-    r"cadê a foto|cade a foto|manda.{0,6}imagem|"
+    r"(?:"
+    # Menção direta
+    r"fot[oa]|fotinha|imagem|"
+    # Verbo + foto/imagem
+    r"manda.{0,10}foto|manda.{0,6}imagem|"
+    # Pedido de ver
+    r"ver o pneu|ver ele|me mostra|mostra.{0,6}pneu|deixa eu ver|quero ver|posso ver|tem como ver|"
+    # Diretos curtos
     r"manda\s+a[ií]\b|manda\s+ele\b|manda\s+as?\b|"
-    r"cad[eê]\??$|cade\??$|cadê\??$|onde\s+(t[aá]|ficou|est[aá])\b|"
-    r"n[aã]o\s+(chegou|apareceu|veio|recebi)\b|reenv[ia])",
+    # Cobrança / paradeiro
+    r"cad[eê](?:\s+a?\s*(?:foto|imagem))?\??|onde\s+(?:t[aá]|ficou|est[aá])\b|"
+    # Problema de envio
+    r"n[aã]o\s+(?:chegou|apareceu|veio|recebi)\b|"
+    # Reenvio
+    r"reenvi\w+|manda de novo|envia de novo"
+    r")",
     _re.IGNORECASE,
 )
 
 _REGEX_PEDIU_VIDEO = _re.compile(
-    r"(?:v[ií]deo|video|manda.{0,10}v[ií]deo|quero ver.{0,10}v[ií]deo|tem v[ií]deo)",
+    r"(?:"
+    r"v[ií]deo|"
+    r"manda.{0,10}v[ií]deo|"
+    r"tem v[ií]deo|"
+    r"quero ver.{0,10}v[ií]deo|"
+    r"manda.{0,10}filminho|filminho|clipe"
+    r")",
     _re.IGNORECASE,
 )
 
-
-def _cliente_pediu_foto(mensagem: str) -> bool:
-    """Retorna True se a mensagem do cliente indica pedido de foto/imagem."""
-    return bool(_REGEX_PEDIU_FOTO.search(mensagem))
+# Etapas em que o contexto é claramente sobre um pneu — bônus de contexto
+_ETAPAS_CONTEXTO_PRODUTO = {"oferta", "confirmacao_item", "entrega_pagamento"}
 
 
-def _cliente_pediu_video(mensagem: str) -> bool:
-    """Retorna True se a mensagem do cliente indica pedido de video."""
-    return bool(_REGEX_PEDIU_VIDEO.search(mensagem))
+def _normalizar_texto(texto: str) -> str:
+    """Lowercase + remove acentos + colapsa espaços."""
+    nfkd = _unicodedata.normalize("NFD", texto.lower())
+    sem_acento = "".join(c for c in nfkd if _unicodedata.category(c) != "Mn")
+    return _re.sub(r"\s+", " ", sem_acento).strip()
+
+
+def _cliente_pediu_foto(mensagem: str, etapa: str | None = None) -> bool:
+    """Retorna True se a mensagem indica pedido de foto/imagem.
+
+    etapa: valor de etapa_atual da sessao. Se estiver em contexto de produto
+    (oferta, confirmacao_item, entrega_pagamento), frases ambíguas como
+    'manda aí' ou 'cadê?' são consideradas pedido de foto.
+    """
+    norm = _normalizar_texto(mensagem)
+    if _REGEX_PEDIU_FOTO.search(norm):
+        return True
+    # Bônus de contexto: frases muito curtas/ambíguas em etapa de produto
+    if etapa in _ETAPAS_CONTEXTO_PRODUTO:
+        if norm in ("manda", "manda ai", "manda ae", "cade", "cade?", "onde ta"):
+            return True
+    return False
+
+
+def _cliente_pediu_video(mensagem: str, etapa: str | None = None) -> bool:
+    """Retorna True se a mensagem indica pedido de vídeo.
+
+    etapa: mesmo comportamento de _cliente_pediu_foto.
+    """
+    norm = _normalizar_texto(mensagem)
+    if _REGEX_PEDIU_VIDEO.search(norm):
+        return True
+    if etapa in _ETAPAS_CONTEXTO_PRODUTO:
+        if norm in ("manda o video", "manda video", "tem video", "video?"):
+            return True
+    return False
 
 
 def processar_turno(
@@ -1443,8 +1491,8 @@ def processar_turno(
     fotos_para_enviar: list[str] = []
     videos_para_enviar: list[str] = []
 
-    pediu_foto = _cliente_pediu_foto(mensagem_texto)
-    pediu_video = _cliente_pediu_video(mensagem_texto)
+    pediu_foto = _cliente_pediu_foto(mensagem_texto, etapa=contexto.sessao.etapa_atual)
+    pediu_video = _cliente_pediu_video(mensagem_texto, etapa=contexto.sessao.etapa_atual)
 
     if (pediu_foto or pediu_video) and pneus_encontrados:
         from agente_2w.db.foto_pneu_repo import buscar_foto_frontal, buscar_video
