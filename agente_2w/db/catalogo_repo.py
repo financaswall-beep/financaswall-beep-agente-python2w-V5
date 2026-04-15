@@ -132,6 +132,24 @@ def buscar_compatibilidade_por_moto(moto_id: UUID) -> list[dict]:
         raise RepositoryError("busca", "compatibilidade_moto_pneu", str(e)) from e
 
 
+def buscar_motos_por_dimensoes(
+    largura: int, perfil: int, aro: int,
+) -> list[dict]:
+    """Retorna motos que usam essa medida (lookup reverso medida → motos)."""
+    try:
+        resultado = (
+            supabase.table("compatibilidade_moto_pneu")
+            .select("moto_id, moto, moto_marca, moto_modelo, moto_versao, posicao, largura, perfil, aro")
+            .eq("largura", largura)
+            .eq("perfil", perfil)
+            .eq("aro", aro)
+            .execute()
+        )
+        return resultado.data
+    except Exception as e:
+        raise RepositoryError("busca", "compatibilidade_moto_pneu", str(e)) from e
+
+
 def buscar_compatibilidade_por_moto_texto(termo: str) -> list[dict]:
     motos = buscar_motos_por_texto(termo)
     if not motos:

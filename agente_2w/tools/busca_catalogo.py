@@ -479,6 +479,52 @@ def buscar_pneus_por_moto(
     })
 
 
+def buscar_motos_por_medida(
+    largura: int | None = None,
+    perfil: int | None = None,
+    aro: int | None = None,
+    medida_texto: str | None = None,
+) -> dict:
+    """Retorna quais motos usam uma medida de pneu (lookup reverso).
+
+    Aceita largura/perfil/aro como inteiros OU medida_texto (ex: '140/70-17').
+    """
+    if medida_texto and not all([largura, perfil, aro]):
+        dim = _parsear_medida(medida_texto)
+        if dim:
+            largura, perfil, aro = dim["largura"], dim["perfil"], dim["aro"]
+
+    if not all([largura, perfil, aro]):
+        return {"quantidade": 0, "motos": [], "erro": "Informe largura, perfil e aro ou medida_texto."}
+
+    try:
+        resultados = catalogo_repo.buscar_motos_por_dimensoes(largura, perfil, aro)
+    except Exception:
+        logger.exception("Erro ao buscar motos por dimensoes %s/%s-%s", largura, perfil, aro)
+        return {"quantidade": 0, "motos": [], "erro": "Erro ao buscar motos compatíveis."}
+
+    # Deduplicar por moto + posição
+    vistos = set()
+    motos_unicas = []
+    for r in resultados:
+        chave = (r.get("moto_id"), r.get("posicao"))
+        if chave not in vistos:
+            vistos.add(chave)
+            motos_unicas.append({
+                "moto": r.get("moto"),
+                "moto_marca": r.get("moto_marca"),
+                "moto_modelo": r.get("moto_modelo"),
+                "moto_versao": r.get("moto_versao"),
+                "posicao": r.get("posicao"),
+            })
+
+    return {
+        "quantidade": len(motos_unicas),
+        "medida": f"{largura}/{perfil}-{aro}",
+        "motos": motos_unicas,
+    }
+
+
 def buscar_detalhes_pneu(pneu_id: str) -> dict:
     """Busca detalhes completos de um pneu específico pelo ID.
 

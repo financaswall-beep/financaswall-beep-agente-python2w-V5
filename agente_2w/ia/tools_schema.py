@@ -92,6 +92,23 @@ TOOLS_SCHEMA = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "buscar_motos_por_medida",
+            "description": "Dado uma medida de pneu (largura/perfil/aro), retorna quais motos usam essa medida e em qual posição (dianteiro/traseiro). Use quando o cliente perguntar 'quais motos usam esse pneu?' ou 'esse pneu serve pra que moto?'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "largura": {"type": "integer", "description": "Largura em mm (ex: 140)"},
+                    "perfil": {"type": "integer", "description": "Perfil (ex: 70)"},
+                    "aro": {"type": "integer", "description": "Aro em polegadas (ex: 17)"},
+                    "medida_texto": {"type": "string", "description": "Texto da medida (ex: '140/70-17'). Alternativa a informar largura+perfil+aro."},
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 # Nomes de tools que retornam pneu_id (para auto-enriquecimento downstream)
