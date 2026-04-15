@@ -48,14 +48,15 @@ _TOOL_DISPATCH: dict = {
 _RETRY_EXCEPTIONS = (RateLimitError, APITimeoutError, APIConnectionError)
 
 
-def _e_modelo_reasoning(modelo: str) -> bool:
-    """True se o modelo usa reasoning tokens (gpt-5.4 flagship, nao mini nem nano).
+def _familia_gpt5(modelo: str) -> bool:
+    """True para qualquer modelo da familia gpt-5.x (flagship, mini, nano).
 
-    gpt-5.4 exige reasoning_effort para usar tool_calls no Chat Completions.
-    gpt-5.4-mini e gpt-5.4-nano sao modelos normais (sem restricao de reasoning).
+    TODA a familia gpt-5.x exige reasoning_effort ao usar tool_calls no Chat Completions.
+    Com reasoning:none (default), tool calls sao bloqueados pela API para qualquer gpt-5.x.
+    Sem tools, temperature=0.3 funciona normalmente para todos os modelos.
+    Ref: https://developers.openai.com/api/docs/guides/migrate-to-responses
     """
-    m = modelo.lower()
-    return "gpt-5." in m and "mini" not in m and "nano" not in m
+    return "gpt-5." in modelo.lower()
 
 
 def _escolher_modelo(tentativa: int, tem_imagem: bool) -> str:
@@ -80,10 +81,10 @@ def _escolher_modelo(tentativa: int, tem_imagem: bool) -> str:
 def _chamar_openai(messages: list, tools=None, model: str | None = None) -> object:
     """Chamada OpenAI com retry automatico para rate limit e timeout.
 
-    Nota sobre gpt-5.4 (reasoning model):
-    - Com tools: usa reasoning_effort='low' (obrigatorio; reasoning:none bloqueia tool_calls)
-    - Sem tools: usa temperature=0.3 normalmente (reasoning:none funciona sem tools)
-    - gpt-5.4-mini/nano: nao sao reasoning models, temperature sempre funciona.
+    Regra gpt-5.x (flagship, mini, nano — todos):
+    - Com tools: OBRIGATORIO usar reasoning_effort='low' (qualquer valor != none)
+      reasoning:none (default) bloqueia tool_calls na familia gpt-5.x inteira
+    - Sem tools: temperature=0.3 funciona normalmente para todos os modelos
     """
     modelo = model or OPENAI_MODEL
     kwargs = {
@@ -102,10 +103,11 @@ def _chamar_openai(messages: list, tools=None, model: str | None = None) -> obje
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
         kwargs["parallel_tool_calls"] = False  # obrigatorio com structured outputs
-        if _e_modelo_reasoning(modelo):
-            # gpt-5.4+: reasoning_effort necessario para habilitar tool_calls no Chat Completions
+        if _familia_gpt5(modelo):
+            # gpt-5.x inteira (mini, nano, flagship): reasoning_effort obrigatorio com tools
             kwargs["reasoning_effort"] = "low"
         else:
+            # gpt-4o e anteriores: temperature normal
             kwargs["temperature"] = 0.3
     else:
         kwargs["temperature"] = 0.3
