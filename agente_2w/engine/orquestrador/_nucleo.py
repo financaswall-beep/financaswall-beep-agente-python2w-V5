@@ -461,10 +461,12 @@ def _salvar_itens_orfaos_pre_finalizacao(sessao_id: UUID) -> int:
             continue
 
         posicao = pneu.get("posicao")
+        posicao_norm = posicao.lower().strip() if posicao else None
 
-        # Filtro por posicao: se ja existe item salvo com mesma posicao,
-        # nao criar — provavelmente o cliente escolheu outro da mesma posicao.
-        if posicao and posicao.lower().strip() in posicoes_ja_cobertas:
+        # Filtro por posicao: se ja existe item salvo (ou criado neste loop)
+        # com mesma posicao, nao criar — evita duplicar pneus "alternativos"
+        # que apareceram na busca mas nunca foram escolhidos pelo cliente.
+        if posicao_norm and posicao_norm in posicoes_ja_cobertas:
             logger.debug(
                 "Safety net finalizacao: pneu_id=%s ignorado (posicao '%s' ja coberta)",
                 pid, posicao,
@@ -503,6 +505,10 @@ def _salvar_itens_orfaos_pre_finalizacao(sessao_id: UUID) -> int:
                 preco_unitario_sugerido=preco,
             ))
             criados += 1
+            # Marcar posicao como coberta para nao criar outro pneu
+            # "alternativo" da mesma posicao neste mesmo loop
+            if posicao_norm:
+                posicoes_ja_cobertas.add(posicao_norm)
             logger.info(
                 "Safety net finalizacao: auto-criado pneu_id=%s (preco=%s, posicao=%s)",
                 pneu_uuid, preco, posicao,
@@ -1004,6 +1010,59 @@ def processar_turno(
         except Exception:
             logger.exception("Falha ao verificar urgencia VIP")
 
+    # --- 2d. Pedido volume (3+ pneus): escalar para gerente de vendas ---
+    # Detecta intencao de 3+ pneus por 3 fontes independentes:
+    #   A) regex na mensagem atual ("4 pneus", "tres motos", etc.)
+    #   B) fato 'quantidade_solicitada' registrado pela IA em turno anterior
+    #   C) numero de motos distintas nos fatos 'motos_informadas'
+    #   D) contagem de item_provisorio ativos com pneu_id
+    try:
+        import re as _re
+        _esc_2d = escalacao_repo.buscar_escalacao_ativa(sessao_id)
+        if not _esc_2d:
+            _qtd_detectada = 0
+
+            # Fonte A: scan da mensagem atual
+            _PALAVRAS_NUM = {"dois": 2, "tres": 3, "quatro": 4, "cinco": 5,
+                             "seis": 6, "sete": 7, "oito": 8, "nove": 9, "dez": 10}
+            _msg_lower = mensagem_texto.lower()
+            _m_num = _re.search(r'(\d+)\s*(?:pneus?|motos?|rodas?)', _msg_lower)
+            if _m_num:
+                _qtd_detectada = max(_qtd_detectada, int(_m_num.group(1)))
+            for _palavra, _val in _PALAVRAS_NUM.items():
+                if _re.search(rf'\b{_palavra}\b\s*(?:pneus?|motos?|rodas?)', _msg_lower):
+                    _qtd_detectada = max(_qtd_detectada, _val)
+
+            # Fonte B: fato quantidade_solicitada
+            _fato_qtd = contexto_repo.buscar_fato_ativo(sessao_id, "quantidade_solicitada")
+            if _fato_qtd and _fato_qtd.valor_texto:
+                _m = _re.search(r'\d+', _fato_qtd.valor_texto)
+                if _m:
+                    try:
+                        _qtd_detectada = max(_qtd_detectada, int(_m.group()))
+                    except (ValueError, TypeError):
+                        pass
+
+            # Fonte C: contagem de motos nos fatos 'motos_informadas'
+            _fato_motos = contexto_repo.buscar_fato_ativo(sessao_id, "motos_informadas")
+            if _fato_motos and _fato_motos.valor_texto:
+                # "CG, Twister, Fazer e NMAX" → 4 entradas
+                _n_motos = len(_re.split(r'[,e]', _fato_motos.valor_texto))
+                _qtd_detectada = max(_qtd_detectada, _n_motos)
+
+            # Fonte D: itens ativos com pneu_id
+            _itens_2d = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
+            _qtd_detectada = max(_qtd_detectada, len([i for i in _itens_2d if i.pneu_id]))
+
+            if _qtd_detectada >= 3:
+                _processar_escalacao(sessao_id, chatwoot_conv_id, "pedido_volume", "codigo")
+                logger.info(
+                    "Handoff volume (2d): %d pneus detectados — escalando para gerente",
+                    _qtd_detectada,
+                )
+    except Exception:
+        logger.exception("Falha na deteccao de volume (2d)")
+
     # --- 2c. Verificar estoque de itens confirmados (B1) ---
     # Se algum item do cliente ficou sem estoque desde o ultimo turno,
     # cancela o item e registra fato para a IA avisar o cliente.
@@ -1085,8 +1144,8 @@ def processar_turno(
             # Tentar extrair medida de: fatos_ativos → fatos_observados deste turno → mensagem crua
             medida_hint = None
             for f in contexto.fatos_ativos:
-                if f.chave == ChaveContexto.MEDIDA_INFORMADA and f.valor_texto:
-                    medida_hint = f.valor_texto
+                if f.chave == ChaveContexto.MEDIDA_INFORMADA and f.valor:
+                    medida_hint = str(f.valor)
                     break
             if not medida_hint:
                 for f in (envelope.fatos_observados or []):
@@ -1199,7 +1258,13 @@ def processar_turno(
         ChaveContexto.FRETE_VALOR in _chaves_antes
         or ChaveContexto.FRETE_NAO_COBERTO in _chaves_antes
     )
-    _consultar_e_registrar_frete(sessao_id)
+    # Nao calcular frete se nao ha produto confirmado no carrinho
+    _itens_8c = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
+    _tem_pneu_8c = any(i.pneu_id for i in _itens_8c)
+    if _tem_pneu_8c:
+        _consultar_e_registrar_frete(sessao_id)
+    else:
+        logger.debug("Step 8c: sem item com pneu_id — calculo de frete adiado")
     _frete_calculado_agora = not _frete_ja_tinha and (
         contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.FRETE_VALOR) is not None
         or contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.FRETE_NAO_COBERTO) is not None
@@ -1483,10 +1548,12 @@ def processar_turno(
     etapa_resultante = envelope.etapa_atual
     ja_tentou_promover = "converter_em_pedido" in envelope.acoes_sugeridas
     if etapa_resultante.value == "fechamento" and not ja_tentou_promover:
+        # Safety net ANTES da validacao: itens orfaos precisam existir para
+        # que validar_pre_condicoes encontre os itens. Sem isso, a validacao
+        # falha por "nenhum item provisorio confirmado" e o pedido nunca e criado.
+        _salvar_itens_orfaos_pre_finalizacao(sessao_id)
         erros_pre = validar_pre_condicoes(sessao_id)
         if not erros_pre:
-            # Safety net: garantir itens orfaos antes de promover automaticamente
-            _salvar_itens_orfaos_pre_finalizacao(sessao_id)
             try:
                 pedido_criado = promover_para_pedido(sessao_id)
                 logger.info(

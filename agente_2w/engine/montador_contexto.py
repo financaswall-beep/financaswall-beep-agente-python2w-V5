@@ -1,7 +1,7 @@
 from uuid import UUID
 from datetime import datetime, timezone
 
-from agente_2w.db import sessao_repo, mensagem_repo, contexto_repo, item_provisorio_repo, cliente_repo, pedido_repo, catalogo_repo, area_entrega_repo, config_loja_repo
+from agente_2w.db import sessao_repo, mensagem_repo, contexto_repo, item_provisorio_repo, cliente_repo, pedido_repo, catalogo_repo, area_entrega_repo, config_loja_repo, escalacao_repo
 from agente_2w.engine.pendencias import acoes_permitidas, pendencias_da_etapa
 from agente_2w.enums.enums import StatusSessao, StatusItemProvisorio
 from agente_2w.constantes import ChaveContexto
@@ -349,6 +349,47 @@ def montar_contexto(sessao_id: UUID) -> ContextoExecutavel:
                     f"ESTOQUE CRITICO: '{_nome}' tem apenas {_qtd} unidade(s) — "
                     "mencione de passagem: 'Esse aqui to com poucas unidades, ta.'"
                 )
+
+    # Alerta BLOQUEADOR: pedido volume (3+ pneus) — escalar para gerente de vendas
+    # Detecta escalacao ativa com motivo 'pedido_volume' e instrui a IA a
+    # passar o cliente para atendimento humano de forma educada.
+    _esc_volume = escalacao_repo.buscar_escalacao_ativa(sessao_id)
+    if _esc_volume and _esc_volume.motivo == "pedido_volume":
+        alertas.append(
+            "PEDIDO VOLUME: o cliente quer 3 ou mais pneus. Isso foi passado para nosso "
+            "gerente de vendas que vai dar atencao especial. "
+            "Informe o cliente de forma natural e simpática: "
+            "'Boa noticia — pra um pedido desse tamanho nosso gerente de vendas ja ta por dentro "
+            "e vai te atender agora! Qualquer coisa e so falar.' "
+            "Nao tente processar o pedido voce mesmo. Nao faca mais perguntas sobre os pneus."
+        )
+
+    # Alerta BLOQUEADOR: nenhum pneu confirmado mas etapa passou da identificacao
+    # Impede a IA de coletar endereco/frete/pagamento antes de ter produto no carrinho
+    _itens_com_pneu_ctx = [i for i in itens_db if i.pneu_id]
+    if not _itens_com_pneu_ctx and sessao.etapa_atual != EtapaFluxo.identificacao:
+        alertas.append(
+            "PRODUTO NAO CONFIRMADO: o cliente ainda nao tem nenhum pneu selecionado. "
+            "NAO registre endereco, NAO calcule frete, NAO cite valor de frete, "
+            "NAO peca forma de pagamento, NAO diga 'fechou' ou 'anotado'. "
+            "Se o cliente informar endereco ou falar sobre entrega, responda: "
+            "'Anoto o endereco depois que a gente decidir o pneu! Qual moto voce tem ou qual medida precisa?' "
+            "Foque EXCLUSIVAMENTE em identificar qual pneu o cliente precisa."
+        )
+
+    # Produto nao encontrado no catalogo + cliente ja informou a medida → encerrar com empatia
+    # Detecta: medida registrada + nenhum pneu encontrado na ultima busca + zero itens no carrinho
+    _pneus_ultima_busca = (fato_pneus_raw.valor_json or []) if fato_pneus_raw else []
+    _tem_medida_ctx = ChaveContexto.MEDIDA_INFORMADA in chaves_ativas
+    if not _itens_com_pneu_ctx and _tem_medida_ctx and not _pneus_ultima_busca:
+        alertas.append(
+            "PRODUTO INDISPONIVEL: o cliente ja informou a medida mas nao encontramos nenhum pneu "
+            "correspondente no catalogo. Se o cliente insistir no mesmo produto ou tentar fechar pedido, "
+            "encerre a conversa com empatia: "
+            "'Esse pneu nao temos em estoque agora. Assim que chegar, te aviso! "
+            "Qualquer outra coisa e so chamar.' "
+            "Apos isso, nao faca mais perguntas — aguarde o cliente."
+        )
 
     return ContextoExecutavel(
         sessao=sessao_ctx,
