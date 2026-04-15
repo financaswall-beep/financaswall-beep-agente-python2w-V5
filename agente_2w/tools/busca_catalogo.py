@@ -107,7 +107,12 @@ def buscar_pneus(
     if marca_modelo:
         resultados = catalogo_repo.buscar_pneus_por_marca_modelo(marca_modelo)
     elif medida_texto:
-        resultados = catalogo_repo.buscar_pneus_por_medida_texto(medida_texto)
+        # Dimension-first: tenta parsear medida antes de cair no ilike
+        dim = _parsear_medida(medida_texto)
+        if dim:
+            resultados = catalogo_repo.buscar_pneus_por_dimensoes(**dim)
+        else:
+            resultados = catalogo_repo.buscar_pneus_por_medida_texto(medida_texto)
     else:
         resultados = catalogo_repo.buscar_pneus_por_dimensoes(
             largura=largura, perfil=perfil, aro=aro,
@@ -164,18 +169,36 @@ def _parsear_medida(medida: str) -> dict | None:
     """Converte string de medida em dict com largura, perfil, aro.
 
     Suporta todos os formatos de moto:
-      '100/80-18'   → {'largura': 100, 'perfil': 80, 'aro': 18}
-      '100/80 ZR18' → {'largura': 100, 'perfil': 80, 'aro': 18}
-      '180/65B16'   → {'largura': 180, 'perfil': 65, 'aro': 16}  (Harley bias)
-      '130/90-B16'  → {'largura': 130, 'perfil': 90, 'aro': 16}
+      '100/80-18'       → {'largura': 100, 'perfil': 80, 'aro': 18}
+      '100/80 ZR18'     → {'largura': 100, 'perfil': 80, 'aro': 18}
+      '180/65B16'       → {'largura': 180, 'perfil': 65, 'aro': 16}  (Harley bias)
+      '130/90-B16'      → {'largura': 130, 'perfil': 90, 'aro': 16}
+      '90 90 18'        → {'largura': 90, 'perfil': 90, 'aro': 18}
+      '90-90-18'        → {'largura': 90, 'perfil': 90, 'aro': 18}
+      'traseiro 90 90 18' → {'largura': 90, 'perfil': 90, 'aro': 18}
+      'medida 110/80-17'  → {'largura': 110, 'perfil': 80, 'aro': 17}
     Rejeita dimensões absurdas (aro fora de 10-21) para não cachear lixo.
     """
-    m = re.match(r'(\d{2,3})/(\d{2,3})(?:[\s\-]+[A-Z]{0,2}\s*|[A-Z]{1,2})(\d{2})', medida, re.IGNORECASE)
+    if not medida or not medida.strip():
+        return None
+
+    # Padrão 1: formato com barra — 100/80-18, 100/80 ZR18, 130/90-B16
+    m = re.search(
+        r'(\d{2,3})/(\d{2,3})(?:[\s\-]+[A-Z]{0,2}\s*|[A-Z]{1,2})(\d{2})',
+        medida, re.IGNORECASE,
+    )
     if m:
         largura, perfil, aro = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        if not (10 <= aro <= 21):
-            return None
-        return {"largura": largura, "perfil": perfil, "aro": aro}
+        if 10 <= aro <= 21:
+            return {"largura": largura, "perfil": perfil, "aro": aro}
+
+    # Padrão 2: 3 números separados por espaço, traço ou hífen — 90 90 18, 90-90-18
+    m = re.search(r'(\d{2,3})[\s\-]+(\d{2,3})[\s\-]+(\d{2})', medida)
+    if m:
+        largura, perfil, aro = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 10 <= aro <= 21:
+            return {"largura": largura, "perfil": perfil, "aro": aro}
+
     return None
 
 

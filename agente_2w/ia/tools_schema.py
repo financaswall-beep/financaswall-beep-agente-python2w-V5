@@ -11,14 +11,23 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "buscar_pneus",
-            "description": "Busca pneus no catálogo por dimensões, texto de medida ou marca/modelo.",
+            "description": (
+                "Busca pneus no catálogo. "
+                "REGRA DE OURO: quando o cliente informar medida com números "
+                "(ex: '90/90-18', '90 90 18', '110 80 17'), use SEMPRE "
+                "largura + perfil + aro como inteiros separados — NUNCA use "
+                "medida_texto para medidas numéricas. "
+                "Use medida_texto apenas para entradas NÃO numéricas "
+                "(ex: 'pneu aro 17', 'traseiro pirelli'). "
+                "Use marca_modelo para busca por nome de marca/modelo."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "largura": {"type": "integer", "description": "Largura em mm (ex: 100, 110)"},
-                    "perfil": {"type": "integer", "description": "Altura do perfil (ex: 80, 90)"},
-                    "aro": {"type": "integer", "description": "Diâmetro do aro em polegadas (ex: 17, 18)"},
-                    "medida_texto": {"type": "string", "description": "Trecho da medida (ex: '100/80', '110/80-18')"},
+                    "largura": {"type": "integer", "description": "Largura em mm. Ex: cliente disse '90/90-18' → largura=90"},
+                    "perfil": {"type": "integer", "description": "Perfil em %. Ex: cliente disse '90/90-18' → perfil=90"},
+                    "aro": {"type": "integer", "description": "Aro em polegadas. Ex: cliente disse '90/90-18' → aro=18"},
+                    "medida_texto": {"type": "string", "description": "Use APENAS para entradas NÃO numéricas (ex: 'aro 17', 'pneu traseiro'). Para medidas com 3 números, prefira largura+perfil+aro."},
                     "marca_modelo": {"type": "string", "description": "Nome da marca ou modelo (ex: 'Pirelli', 'Pilot Street')"},
                 },
                 "required": [],

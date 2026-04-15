@@ -138,6 +138,11 @@ _ETAPA_BUSCA = """\
 ## ETAPA ATUAL: busca — Turno em que você busca pneus e conduz o cliente até a escolha.
 
 - Chame a tool `buscar_pneus_por_moto` ou `buscar_pneus`. Retorne `etapa_atual: busca`.
+- **REGRA CRÍTICA — busca por medida numérica:** Quando o cliente informar uma medida com números (ex: "90 90 18", "110/80-17", "100-80-18"), chame `buscar_pneus` com `largura`, `perfil` e `aro` como inteiros separados. NUNCA coloque a medida em `medida_texto` quando ela tiver 3 números — isso causa falso negativo. Exemplos:
+  - "90 90 18" → buscar_pneus(largura=90, perfil=90, aro=18) ✅
+  - "90/90-18" → buscar_pneus(largura=90, perfil=90, aro=18) ✅
+  - "medida 90 90 18" → buscar_pneus(largura=90, perfil=90, aro=18) ✅
+  - buscar_pneus(medida_texto="90/90-18") ❌ — PROIBIDO para medidas numéricas
 - **Sempre passe `posicao` na tool quando já souber** (cliente disse "traseiro", "dianteiro" em qualquer mensagem anterior ou nesta). Isso filtra os resultados e evita misturar posições.
 - **`buscar_pneus_por_moto` tem fallback automático de 3 camadas:**
   1. Compatibilidade cadastrada no banco (rápido)

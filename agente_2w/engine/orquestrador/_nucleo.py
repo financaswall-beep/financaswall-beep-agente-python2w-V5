@@ -1016,6 +1016,38 @@ def processar_turno(
                 len(pneus_encontrados),
             )
 
+    # --- 5c. C9 FALLBACK: busca server-side por dimensoes se IA nao encontrou pneus ---
+    if not pneus_encontrados:
+        from agente_2w.engine.orquestrador.guardrails import (
+            _RE_NEGACAO, tentar_busca_fallback_dimensoes, _montar_mensagem_fallback,
+        )
+        msg_ia = getattr(envelope, "mensagem_cliente", "") or ""
+        if _RE_NEGACAO.search(msg_ia):
+            # Tentar extrair medida de: fatos_ativos → fatos_observados deste turno → mensagem crua
+            medida_hint = None
+            for f in contexto.fatos_ativos:
+                if f.chave == ChaveContexto.MEDIDA_INFORMADA and f.valor_texto:
+                    medida_hint = f.valor_texto
+                    break
+            if not medida_hint:
+                for f in (envelope.fatos_observados or []):
+                    if getattr(f, "chave", None) == "medida_informada":
+                        medida_hint = getattr(f, "valor", None) or getattr(f, "valor_texto", None)
+                        if medida_hint:
+                            break
+            if not medida_hint:
+                medida_hint = mensagem_texto
+
+            pneus_fallback = tentar_busca_fallback_dimensoes(medida_hint)
+            if pneus_fallback:
+                pneus_encontrados = pneus_fallback
+                envelope.mensagem_cliente = _montar_mensagem_fallback(pneus_fallback)
+                _persistir_pneus_encontrados(sessao_id, pneus_encontrados)
+                logger.info(
+                    "C9 FALLBACK injetou %d pneu(s) na resposta e substituiu mensagem",
+                    len(pneus_encontrados),
+                )
+
     # --- 6. Aplicar fatos observados ---
     _aplicar_fatos_observados(sessao_id, envelope.fatos_observados, msg_entrada.id)
 
