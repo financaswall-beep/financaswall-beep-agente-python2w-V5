@@ -161,15 +161,31 @@ def _normalizar(texto: str) -> str:
 
 
 def _gerar_candidatos(texto: str) -> list[str]:
-    """Gera n-grams (1 a 3 palavras) normalizados, filtrando stop words."""
+    """Gera n-grams (1 a 3 palavras) normalizados para busca no cache de bairros.
+
+    Regra universal: um n-gram é válido se contém pelo menos uma palavra
+    "âncora" — que não seja stop word e tenha mais de 2 caracteres.
+
+    Isso preserva preposições e palavras curtas dentro de nomes compostos sem
+    emiti-las como candidatos isolados inúteis:
+      "ilha do governador" → âncoras: "ilha", "governador" → válido ✓
+      "pé pequeno"         → âncora: "pequeno"             → válido ✓
+      "nova iguacu"        → âncoras: "nova", "iguacu"     → válido ✓
+      "do" / "da" sozinhos → sem âncora                    → ignorado ✓
+    """
     limpo = re.sub(r"[^\w\s]", " ", texto)
     palavras = [_normalizar(p) for p in limpo.split() if p.strip()]
-    palavras = [p for p in palavras if p and p not in _STOP_WORDS and len(p) > 2]
+    palavras = [p for p in palavras if p]
+
+    def _tem_ancora(ngram: list[str]) -> bool:
+        return any(p not in _STOP_WORDS and len(p) > 2 for p in ngram)
 
     candidatos = []
     for n in (3, 2, 1):
         for i in range(len(palavras) - n + 1):
-            candidatos.append(" ".join(palavras[i : i + n]))
+            ngram = palavras[i : i + n]
+            if _tem_ancora(ngram):
+                candidatos.append(" ".join(ngram))
     return candidatos
 
 
