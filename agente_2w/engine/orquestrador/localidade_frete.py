@@ -92,25 +92,28 @@ def _atualizar_localidade_cliente(sessao_id: UUID, cliente_id) -> None:
 
         # Sempre atualiza municipio/bairro com dados da sessao atual —
         # clientes recorrentes podem ter localidade desatualizada de sessoes anteriores.
+
+        # 1. Municipio do fato dedicado (mais confiavel — registrado explicitamente pela IA)
         fato = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.MUNICIPIO)
         if fato and fato.valor_texto:
             campos["municipio"] = fato.valor_texto
 
-        fato = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.BAIRRO)
-        if fato and fato.valor_texto:
-            campos["bairro"] = fato.valor_texto
+        # 2. Endereco_entrega e a fonte mais completa e atual (cliente acabou de fornecer)
+        #    Bairro parseado do endereco tem prioridade sobre fato standalone (que pode ser
+        #    de historico antigo). Municipio parseado so preenche lacuna.
+        fato_end = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.ENDERECO_ENTREGA)
+        if fato_end:
+            municipio_parsed, bairro_parsed = _parsear_localidade_endereco(fato_end)
+            if municipio_parsed and "municipio" not in campos:
+                campos["municipio"] = municipio_parsed
+            if bairro_parsed:
+                campos["bairro"] = bairro_parsed  # overrides fato standalone
 
-        municipio_pendente = "municipio" not in campos
-        bairro_pendente = "bairro" not in campos
-
-        if municipio_pendente or bairro_pendente:
-            fato_end = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.ENDERECO_ENTREGA)
-            if fato_end:
-                municipio_parsed, bairro_parsed = _parsear_localidade_endereco(fato_end)
-                if municipio_pendente and municipio_parsed:
-                    campos["municipio"] = municipio_parsed
-                if bairro_pendente and bairro_parsed:
-                    campos["bairro"] = bairro_parsed
+        # 3. Fato BAIRRO standalone so preenche se endereco nao forneceu bairro
+        if "bairro" not in campos:
+            fato = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.BAIRRO)
+            if fato and fato.valor_texto:
+                campos["bairro"] = fato.valor_texto
 
         if campos:
             cliente_repo.atualizar_cliente(cliente_id, campos)
