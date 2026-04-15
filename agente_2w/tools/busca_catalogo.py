@@ -547,3 +547,54 @@ def buscar_detalhes_pneu(pneu_id: str) -> dict:
         "estoque": estoque.model_dump(mode="json") if estoque else None,
         "fotos": fotos,
     }
+
+
+# ---------------------------------------------------------------------------
+# Tools anti-alucinação: dados reais do catálogo
+# ---------------------------------------------------------------------------
+
+def consultar_catalogo_resumo() -> dict:
+    """Retorna marcas, medidas e aros que possuem estoque disponível.
+
+    Use quando o cliente perguntar "que marcas vocês têm?", "que medidas tem?",
+    "tem aro 17?", ou qualquer variação.
+    """
+    try:
+        return catalogo_repo.catalogo_resumo()
+    except Exception:
+        logger.exception("Erro ao consultar catalogo_resumo")
+        return {"marcas": [], "medidas": [], "aros": [], "erro": "Erro ao consultar catálogo."}
+
+
+def consultar_motos_atendidas() -> dict:
+    """Retorna motos que possuem pneu em estoque e em quais posições.
+
+    Use quando o cliente perguntar "pra que motos vocês têm pneu?",
+    "tem pra Honda?", "que motos vocês atendem?".
+    """
+    try:
+        resultado = catalogo_repo.motos_atendidas()
+        return {
+            "quantidade": len(resultado),
+            "motos": resultado,
+        }
+    except Exception:
+        logger.exception("Erro ao consultar motos_atendidas")
+        return {"quantidade": 0, "motos": [], "erro": "Erro ao consultar motos."}
+
+
+def consultar_historico_cliente(cliente_id: str, limite: int = 5) -> dict:
+    """Retorna os últimos pedidos de um cliente.
+
+    Use quando o cliente perguntar "qual foi meu último pedido?",
+    "quero o mesmo de antes", "já comprei aqui antes".
+    """
+    try:
+        resultado = catalogo_repo.historico_cliente(UUID(cliente_id), limite)
+        return {
+            "quantidade": len(resultado),
+            "pedidos": resultado,
+        }
+    except Exception:
+        logger.exception("Erro ao consultar historico_cliente %s", cliente_id)
+        return {"quantidade": 0, "pedidos": [], "erro": "Erro ao consultar histórico."}

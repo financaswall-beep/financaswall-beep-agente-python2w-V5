@@ -233,3 +233,35 @@ def baixar_estoque_fisico(pneu_id: UUID, quantidade: int) -> None:
         logger.info("Baixa fisica atomica pneu %s: -%d", pneu_id, quantidade)
     except Exception:
         logger.exception("Falha ao baixar estoque fisico pneu %s", pneu_id)
+
+
+# --- RPCs de consulta (anti-alucinacao) ---
+
+def catalogo_resumo() -> dict:
+    """Retorna marcas, medidas e aros com estoque disponivel."""
+    try:
+        resultado = supabase.rpc("catalogo_resumo").execute()
+        return resultado.data or {"marcas": [], "medidas": [], "aros": []}
+    except Exception as e:
+        raise RepositoryError("busca", "rpc:catalogo_resumo", str(e)) from e
+
+
+def motos_atendidas() -> list[dict]:
+    """Retorna motos distintas que possuem pneu em estoque."""
+    try:
+        resultado = supabase.rpc("motos_atendidas").execute()
+        return resultado.data or []
+    except Exception as e:
+        raise RepositoryError("busca", "rpc:motos_atendidas", str(e)) from e
+
+
+def historico_cliente(cliente_id: UUID, limite: int = 5) -> list[dict]:
+    """Retorna ultimos pedidos de um cliente."""
+    try:
+        resultado = supabase.rpc("historico_cliente", {
+            "p_cliente_id": str(cliente_id),
+            "p_limite": limite,
+        }).execute()
+        return resultado.data or []
+    except Exception as e:
+        raise RepositoryError("busca", "rpc:historico_cliente", str(e)) from e

@@ -109,6 +109,45 @@ TOOLS_SCHEMA = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_catalogo_resumo",
+            "description": "Retorna as marcas, medidas e aros disponíveis em estoque. Use quando o cliente perguntar 'que marcas vocês têm?', 'tem aro 17?', 'que medidas tem?', 'o que vocês vendem?'. NUNCA liste marcas ou medidas de memória — use sempre esta tool.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_motos_atendidas",
+            "description": "Retorna quais motos possuem pneu em estoque e em quais posições. Use quando o cliente perguntar 'pra que motos vocês têm pneu?', 'tem pra Honda?', 'que motos vocês atendem?'. NUNCA liste motos de memória — use sempre esta tool.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_historico_cliente",
+            "description": "Retorna os últimos pedidos de um cliente. Use quando o cliente perguntar 'qual foi meu último pedido?', 'quero o mesmo de antes', 'já comprei aqui?'. Necessita do cliente_id (disponível no contexto após resolução do cliente).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cliente_id": {"type": "string", "description": "UUID do cliente (do contexto da sessão)"},
+                    "limite": {"type": "integer", "description": "Quantidade máxima de pedidos (default: 5)"},
+                },
+                "required": ["cliente_id"],
+            },
+        },
+    },
 ]
 
 # Nomes de tools que retornam pneu_id (para auto-enriquecimento downstream)

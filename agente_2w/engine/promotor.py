@@ -435,15 +435,8 @@ def promover_para_pedido(sessao_id: UUID) -> Pedido:
         pedido_id, valor_total, rpc_result.get("itens_criados"),
     )
 
-    # Reservar estoque para cada item promovido
-    for item_payload in itens_payload:
-        try:
-            catalogo_repo.incrementar_reservado(
-                UUID(item_payload["pneu_id"]),
-                item_payload["quantidade"],
-            )
-        except Exception:
-            logger.exception("Falha ao reservar estoque pneu %s", item_payload["pneu_id"])
+    # Estoque já foi reservado atomicamente dentro da RPC (FOR UPDATE + UPDATE estoque)
+    # Não é mais necessário chamar incrementar_reservado separadamente.
 
     # Atualizar inteligencia de negocio do cliente
     _atualizar_stats_cliente(sessao.cliente_id, valor_total)

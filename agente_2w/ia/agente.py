@@ -18,6 +18,9 @@ from agente_2w.tools.busca_catalogo import (
     buscar_pneus_por_moto,
     buscar_detalhes_pneu,
     buscar_motos_por_medida,
+    consultar_catalogo_resumo,
+    consultar_motos_atendidas,
+    consultar_historico_cliente,
 )
 from agente_2w.tools.consulta_estoque import consultar_estoque
 from agente_2w.tools.resolve_cliente import resolver_cliente
@@ -35,6 +38,9 @@ _TOOL_DISPATCH: dict = {
     "buscar_pneus_por_moto": buscar_pneus_por_moto,
     "buscar_detalhes_pneu": buscar_detalhes_pneu,
     "buscar_motos_por_medida": buscar_motos_por_medida,
+    "consultar_catalogo_resumo": consultar_catalogo_resumo,
+    "consultar_motos_atendidas": consultar_motos_atendidas,
+    "consultar_historico_cliente": consultar_historico_cliente,
     "consultar_estoque": consultar_estoque,
     "resolver_cliente": resolver_cliente,
 }
