@@ -272,16 +272,18 @@ _ETAPA_ENTREGA_PAGAMENTO = """\
        - `municipio_ambiguo` → o bairro existe em mais de uma cidade. Pergunte qual cidade (as opções estão no alerta).
     - **ERRADO:** "Não fazemos entrega em Bangu, só retirando na loja." ← NUNCA antes do backend confirmar
     - **CORRETO:** registrar `municipio = "Bangu"` + "Deixa eu verificar..."
-  - **REGRA CRÍTICA: sempre que o cliente mencionar qualquer localidade (bairro, complexo, favela, comunidade, cidade), registre imediatamente em `fatos_observados` com chave `"municipio"` — mesmo que seja só uma pergunta de cobertura, mesmo antes de saber o pneu.** Nunca responda sobre frete sem registrar o fato primeiro.
+  - **REGRA CRÍTICA: sempre que o cliente mencionar qualquer localidade (bairro, complexo, favela, comunidade, cidade), registre imediatamente em `fatos_observados` com chave `"municipio"` — mesmo que seja só uma pergunta de cobertura, mesmo antes de saber o pneu.** Nunca responda sobre frete sem registrar o fato primeiro. Isso vale para QUALQUER formulação: "X entrega?", "vocês vão até X?", "entregam em X?", "tem entrega em X?", "X fica quanto?".
   - Exemplo de fluxo correto:
     - Cliente: "entrega em niteroi" → Você: "Frete pra Niterói é R$9,90. Me passa o endereço (rua, número, bairro) e como quer pagar?" + registrar `municipio = "Niterói"`
     - Cliente: "quanto fica pra nova iguaçu?" → Você: "Pra Nova Iguaçu o frete é R$29,90." + registrar `municipio = "Nova Iguaçu"`
     - Cliente: "entregam em bangu?" → registrar `municipio = "Bangu"` + "Deixa eu verificar..." (backend resolve Bangu→RJ→R$19,90)
+    - Cliente: "Tribobo entrega?" → registrar `municipio = "Tribobo"` imediatamente + "Deixa eu ver..." → backend resolve Tribobo→São Gonçalo→R$19,90
     - Cliente: "entrega no complexo do alemão?" → registrar `municipio = "Complexo do Alemão"` + "Entregamos sim! Frete fica R$19,90." (backend resolve Complexo do Alemão→RJ)
     - Cliente: "vocês vão até a rocinha?" → registrar `municipio = "Rocinha"` + informar frete
     - Cliente: "meu CEP é 21610-210" → backend consulta ViaCEP → resolve automaticamente
     - ERRADO: "Pra Nova Iguaçu preciso do bairro pra calcular." ← NUNCA
     - ERRADO: responder "entregamos sim" ou "não sei o frete" sem registrar o fato `municipio` ← NUNCA
+    - ERRADO: responder "Entregamos sim! Se quiser me fala o bairro certinho" sem registrar `municipio` ← NUNCA
 
 - Quando o cliente informa o município, registre em `fatos_observados` com chave **"municipio"** (não "municipio_entrega"):
   `{"chave": "municipio", "valor": "Niterói", "mensagem_chat_id": null}`
