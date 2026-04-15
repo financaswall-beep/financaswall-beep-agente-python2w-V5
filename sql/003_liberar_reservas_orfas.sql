@@ -5,10 +5,8 @@
 -- Previne leak de reservas que travavam disponível_real.
 -- ============================================================
 
--- 1. Adicionar status 'expirado' ao enum (se usar check constraint)
---    Se a coluna status_pedido for TEXT livre, isso nao e necessario.
---    Caso use enum nativo do Postgres, descomente:
--- ALTER TYPE status_pedido ADD VALUE IF NOT EXISTS 'expirado';
+-- 1. Adicionar status 'expirado' ao enum nativo do Postgres
+ALTER TYPE status_pedido_enum ADD VALUE IF NOT EXISTS 'expirado';
 
 -- 2. Funcao principal: libera reservas orfas e marca pedidos como expirados
 CREATE OR REPLACE FUNCTION liberar_reservas_orfas(p_dias_limite integer DEFAULT 7)
