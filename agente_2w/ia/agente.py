@@ -49,7 +49,7 @@ from agente_2w.tools.resolve_cliente import resolver_cliente
 
 _client = OpenAI(api_key=OPENAI_API_KEY, timeout=OPENAI_TIMEOUT)
 
-from agente_2w.ia.schemas_envelope import ENVELOPE_IA_SCHEMA as _ENVELOPE_IA_SCHEMA
+from agente_2w.ia.schemas_envelope import ENVELOPE_IA_SCHEMA as _ENVELOPE_IA_SCHEMA, build_envelope_schema as _build_envelope_schema
 from agente_2w.ia.tools_schema import TOOLS_SCHEMA, TOOLS_COM_PNEU as _TOOLS_COM_PNEU
 from agente_2w.ia.extracao_pneus import extrair_pneus_de_resultado as _extrair_pneus_de_resultado
 
@@ -194,6 +194,7 @@ def _chamar_openai_responses(
     input_items: list | str,
     tools: list | None = None,
     model: str | None = None,
+    envelope_schema: dict | None = None,
 ) -> object:
     """Chamada via Responses API — para gpt-5.x."""
     modelo = model or OPENAI_MODEL
@@ -208,7 +209,7 @@ def _chamar_openai_responses(
                 "type": "json_schema",
                 "name": "EnvelopeIA",
                 "strict": True,
-                "schema": _ENVELOPE_IA_SCHEMA,
+                "schema": envelope_schema or _ENVELOPE_IA_SCHEMA,
             },
         },
         "store": False,
@@ -277,6 +278,10 @@ def _chamar_agente_responses(
     modelo = _escolher_modelo(tentativa, bool(imagens))
     logger.info("[ROUTER-RESPONSES] modelo=%s imagem=%s tentativa=%d", modelo, bool(imagens), tentativa)
 
+    # Schema dinâmico: restringe etapa_atual e acoes_sugeridas ao contexto atual
+    # O modelo não consegue retornar etapa ou ação inválida — sem retry necessário
+    envelope_schema = _build_envelope_schema(etapa_atual or "identificacao")
+
     # instructions = system prompt + contexto (mais eficiente para cache)
     instructions = f"{prompt_sistema}\n\nCONTEXTO ATUAL DA SESSÃO (JSON):\n{contexto_json}"
 
@@ -312,6 +317,7 @@ def _chamar_agente_responses(
             input_items=input_items,
             tools=tools,
             model=modelo,
+            envelope_schema=envelope_schema,
         )
 
         output_items = response.output
@@ -354,6 +360,7 @@ def _chamar_agente_responses(
         input_items=input_items,
         tools=None,
         model=modelo,
+        envelope_schema=envelope_schema,
     )
     return response.output_text or "", pneus_encontrados
 

@@ -1316,6 +1316,22 @@ def processar_turno(
                                 logger.exception("Rede de seguranca 9d falhou")
 
     # --- 10. Despachar acoes sugeridas ---
+    # Caso especial: se o mini propoe fechamento + converter_em_pedido no mesmo turno,
+    # a transicao de etapa precisa ser salva ANTES de chamar o promotor,
+    # pois validar_pre_condicoes checa a etapa no banco.
+    # A transicao completa e re-aplicada em --- 11 --- (idempotente se ja feita).
+    _propoe_fechamento = (
+        envelope.etapa_atual == EtapaFluxo.fechamento
+        and contexto.sessao.etapa_atual != EtapaFluxo.fechamento
+        and "converter_em_pedido" in envelope.acoes_sugeridas
+        and transicao_permitida(contexto.sessao.etapa_atual, EtapaFluxo.fechamento)
+    )
+    if _propoe_fechamento:
+        sessao_repo.atualizar_etapa(sessao_id, EtapaFluxo.fechamento)
+        logger.info(
+            "Pre-transicao para fechamento (converter_em_pedido): %s -> fechamento",
+            contexto.sessao.etapa_atual.value,
+        )
     pedido_criado = _despachar_acoes(sessao_id, envelope.acoes_sugeridas)
     if chatwoot_conv_id and pedido_criado:
         _municipio_fato = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.MUNICIPIO)

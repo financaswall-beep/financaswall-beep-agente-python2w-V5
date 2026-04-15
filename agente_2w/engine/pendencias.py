@@ -18,6 +18,7 @@ ACOES_POR_ETAPA: dict[EtapaFluxo, list[str]] = {
         "buscar_medida_proxima",
         "pedir_clarificacao_moto",
         "pedir_clarificacao_medida",
+        "registrar_fato_observado",
         "registrar_opcoes_encontradas",
         "responder_incerteza_segura",
     ],
@@ -34,6 +35,7 @@ ACOES_POR_ETAPA: dict[EtapaFluxo, list[str]] = {
         "perguntar_forma_pagamento",
         "registrar_entrega",
         "registrar_pagamento",
+        "registrar_fato_observado",
         "responder_incerteza_segura",
     ],
     EtapaFluxo.confirmacao_item: [
@@ -43,6 +45,7 @@ ACOES_POR_ETAPA: dict[EtapaFluxo, list[str]] = {
         "rejeitar_item",
         "adicionar_outro_item",  # cliente quer mais pneus — volta para busca
         "finalizar_itens",       # cliente nao quer mais itens — avanca para entrega_pagamento
+        "registrar_fato_observado",
         "responder_incerteza_segura",
     ],
     EtapaFluxo.entrega_pagamento: [
@@ -52,6 +55,7 @@ ACOES_POR_ETAPA: dict[EtapaFluxo, list[str]] = {
         "registrar_entrega",
         "registrar_pagamento",
         "adicionar_outro_item",  # cliente lembrou de outro pneu — volta para busca
+        "registrar_fato_observado",
         "responder_incerteza_segura",
     ],
     EtapaFluxo.fechamento: [
@@ -62,6 +66,7 @@ ACOES_POR_ETAPA: dict[EtapaFluxo, list[str]] = {
         "buscar_por_medida",         # erro_promocao (estoque=0): buscar por medida
         "explicar_falta",            # informar indisponibilidade
         "rejeitar_item",             # descartar item sem estoque
+        "registrar_fato_observado",
         "responder_incerteza_segura",
     ],
 }

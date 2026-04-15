@@ -1,13 +1,38 @@
 """CLI interativo para testar o agente localmente."""
 import sys
-from uuid import UUID
+from agente_2w.db import sessao_repo
+from agente_2w.enums.enums import EtapaFluxo, StatusSessao
+from agente_2w.schemas.sessao_chat import SessaoChatCreate
 from agente_2w.engine.orquestrador._nucleo import processar_turno
 
-SESSAO_ID = UUID("6e7f5e96-6e54-4af6-8ee1-fca77e55daca")
+CONTATO = sys.argv[1] if len(sys.argv) > 1 else "5521999000099"
+
+# Buscar sessao ativa existente ou criar nova
+_sessoes = (
+    __import__("agente_2w.db.client", fromlist=["supabase"]).supabase
+    .table("sessao_chat")
+    .select("id")
+    .eq("contato_externo", CONTATO)
+    .eq("status_sessao", "ativa")
+    .order("criado_em", desc=True)
+    .limit(1)
+    .execute()
+)
+if _sessoes.data:
+    from uuid import UUID
+    SESSAO_ID = UUID(_sessoes.data[0]["id"])
+else:
+    _nova = sessao_repo.criar_sessao(SessaoChatCreate(
+        canal="teste_cli",
+        contato_externo=CONTATO,
+        etapa_atual=EtapaFluxo.identificacao,
+        status_sessao=StatusSessao.ativa,
+    ))
+    SESSAO_ID = _nova.id
 
 print("=" * 60)
 print("AGENTE 2W PNEUS — teste interativo")
-print(f"sessao: {SESSAO_ID}")
+print(f"sessao: {SESSAO_ID}  |  contato: {CONTATO}")
 print("Digite sua mensagem. 'sair' para encerrar.")
 print("=" * 60)
 

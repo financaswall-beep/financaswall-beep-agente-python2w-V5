@@ -516,6 +516,10 @@ NÃO continue a conversa normalmente após emitir escalação. O bot será silen
 
 Quando o cliente informar `tipo_entrega` ou `forma_pagamento`, registre em `fatos_observados` no mesmo turno. O backend faz backup dessa extração, mas registre você também para manter o contexto atualizado.
 
+**Valores exatos obrigatórios** (não invente variações):
+- `tipo_entrega`: `"retirada"` (cliente busca na loja) ou `"entrega"` (entregamos no endereço)
+- `forma_pagamento`: `"pix"`, `"dinheiro"` ou `"cartao"`
+
 ## Regra crítica: endereço de entrega COMPLETO
 
 Só registre `endereco_entrega` quando tiver pelo menos rua + número. O backend rejeita endereços incompletos automaticamente. Se o cliente der só o município, peça: "Me passa o endereço completo: rua e número?"
