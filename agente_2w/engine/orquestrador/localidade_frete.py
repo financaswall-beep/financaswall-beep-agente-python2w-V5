@@ -90,18 +90,18 @@ def _atualizar_localidade_cliente(sessao_id: UUID, cliente_id) -> None:
 
         campos: dict = {}
 
-        if not cliente.municipio:
-            fato = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.MUNICIPIO)
-            if fato and fato.valor_texto:
-                campos["municipio"] = fato.valor_texto
+        # Sempre atualiza municipio/bairro com dados da sessao atual —
+        # clientes recorrentes podem ter localidade desatualizada de sessoes anteriores.
+        fato = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.MUNICIPIO)
+        if fato and fato.valor_texto:
+            campos["municipio"] = fato.valor_texto
 
-        if not cliente.bairro:
-            fato = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.BAIRRO)
-            if fato and fato.valor_texto:
-                campos["bairro"] = fato.valor_texto
+        fato = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.BAIRRO)
+        if fato and fato.valor_texto:
+            campos["bairro"] = fato.valor_texto
 
-        municipio_pendente = not cliente.municipio and "municipio" not in campos
-        bairro_pendente = not cliente.bairro and "bairro" not in campos
+        municipio_pendente = "municipio" not in campos
+        bairro_pendente = "bairro" not in campos
 
         if municipio_pendente or bairro_pendente:
             fato_end = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.ENDERECO_ENTREGA)

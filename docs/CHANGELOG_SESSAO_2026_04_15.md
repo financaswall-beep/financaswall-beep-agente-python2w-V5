@@ -228,5 +228,134 @@ Antes de ativar em produção, testar:
 - [x] `busca_web.py` — usa `OPENAI_MODEL_MINI`
 - [x] `_nucleo.py` — passa `tentativa+1` para `chamar_agente`
 - [x] Zero erros de lint/tipo
-- [ ] **PENDENTE:** git commit + push para GitHub
-- [ ] **PENDENTE:** variáveis no Coolify (ver seção acima)
+- [x] git commit b17a7ba — push para GitHub V5
+- [x] Variáveis configuradas no Coolify + redeploy
+
+---
+
+## ⚠️ PROBLEMA DESCOBERTO EM PRODUÇÃO (15/04/2026 — tarde)
+
+### Sintoma
+Após o deploy no Coolify com `OPENAI_MODEL_MINI=gpt-5.4-mini`, produção passou a retornar
+`"Desculpe, tive um problema ao processar sua mensagem"` em **todas** as mensagens.
+Isso significa que **todos os retries também falharam** (mini E flagship).
+
+### Causa raiz — BUG no código implementado
+
+A documentação diz:
+
+> **"Starting with GPT-5.4, tool calling is not supported in Chat Completions with `reasoning: none`."**
+
+Isso vale para **TODA a família gpt-5.x — incluindo gpt-5.4-mini**.
+
+O código implementado só adicionava `reasoning_effort` para o flagship:
+```python
+if _e_modelo_reasoning(modelo):   # True só para flagship
+    kwargs["reasoning_effort"] = "low"
+else:
+    kwargs["temperature"] = 0.3   # ← mini cai aqui → reasoning:none → tools BLOQUEADAS
+```
+
+`gpt-5.4-mini` com `tools` + **sem** `reasoning_effort` = `reasoning: none` automático → API bloqueia tool calls → chamada falha → "Desculpe".
+
+A função `_e_modelo_reasoning` foi escrita como "mini NÃO é reasoning" — tecnicamente correto para **sem tools**, mas **errado com tools**: com tools, a família 5.x inteira precisa de `reasoning_effort` no Chat Completions.
+
+### Pesquisa adicional realizada (documentação OpenAI lida)
+
+Documentos lidos nesta sessão:
+- `prompt-guidance` (gpt-5.4 family): padrões de prompt, `reasoning_effort` como "last-mile knob", comportamento mini vs flagship
+- `structured-outputs`: confirmado suporte em gpt-5.4-mini (`gpt-4o-mini` e later)
+- `function-calling`: confirmado que strict mode funciona nos modelos mini
+- `migrate-to-responses`: **Responses API é mais inteligente que Chat Completions** (mesmo modelo, +3% benchmark, +40-80% cache)
+- `tools-web-search`: `web_search` (GA) vs `web_search_preview` (legacy)
+- `tools-tool-search`: carregamento dinâmico de tools — só gpt-5.4+
+- `deep-research`: modelos dedicados (`o3-deep-research`) — não aplicável ao agente
+
+### Achados relevantes para o projeto
+
+| Achado | Impacto |
+|--------|---------|
+| gpt-5.4-mini com tools no Chat Completions precisa de `reasoning_effort` | **CRÍTICO — causa do bug** |
+| Responses API = +inteligência +40-80% cache vs Chat Completions | Oportunidade futura |
+| `web_search` (GA) substituiu `web_search_preview` em `busca_web.py` | Melhoria futura |
+| `tool_search` para carregar tools dinamicamente (só gpt-5.4+) | Baixa prioridade (9 tools) |
+| `reasoning_effort="medium"` dá melhores respostas em casos complexos | Ajuste futuro |
+
+---
+
+## Guia de rollback completo
+
+### Rollback IMEDIATO (30 segundos, sem código)
+No Coolify → Environment Variables → alterar:
+```
+OPENAI_MODEL_MINI=gpt-4o
+OPENAI_MODEL_FLAGSHIP=gpt-4o
+```
+Redeploy. Produção volta a usar gpt-4o para todos os turnos. Custo igual ao estado anterior, sem quebrar nada.
+
+### Rollback PARCIAL (só mini)
+```
+OPENAI_MODEL_MINI=gpt-4o
+OPENAI_MODEL_FLAGSHIP=gpt-5.4
+```
+Mini usa gpt-4o (seguro), flagship usa gpt-5.4 com `reasoning_effort="low"` (funciona).
+
+### Rollback TOTAL (código)
+```
+git revert b17a7ba
+git push
+```
+Reverte os 4 arquivos para o estado pré-sessão (gpt-4o puro, sem roteamento).
+
+### Variáveis de ambiente — estado atual no Coolify
+```
+OPENAI_MODEL=gpt-5.4
+OPENAI_MODEL_MINI=gpt-5.4-mini      ← causa do bug (precisa de fix no código)
+OPENAI_MODEL_FLAGSHIP=gpt-5.4
+```
+
+---
+
+## Fix planejado (Fase: pendente de autorização)
+
+**Opção A — Fix cirúrgico no código** (manter gpt-5.4-mini):
+Estender `_e_modelo_reasoning` para retornar `True` para qualquer `gpt-5.x` quando há tools,
+independente de ser mini ou não. Uma linha de diferença:
+
+```python
+def _e_precisa_reasoning_effort(modelo: str, tem_tools: bool) -> bool:
+    """Toda a familia gpt-5.x precisa de reasoning_effort quando usa tools no Chat Completions."""
+    if not tem_tools:
+        return False
+    m = modelo.lower()
+    return "gpt-5." in m  # mini, nano, flagship — todos precisam
+
+# Em _chamar_openai:
+if tools:
+    kwargs["tools"] = tools
+    kwargs["tool_choice"] = "auto"
+    kwargs["parallel_tool_calls"] = False
+    if _e_precisa_reasoning_effort(modelo, tem_tools=True):
+        kwargs["reasoning_effort"] = "low"   # vale para mini E flagship
+    # sem temperature quando há reasoning_effort
+```
+
+**Opção B — Rollback imediato + fix depois** (mais seguro):
+1. Coolify: `OPENAI_MODEL_MINI=gpt-4o` → redeploy → produção volta
+2. Código: implementar fix da Opção A
+3. Teste local antes de reativar mini
+
+**Opção C — Migrar para Responses API** (mais inteligente, mais cache):
+A Responses API não tem a restrição de `reasoning:none`. Ferramentas funcionam sem `reasoning_effort`.
+Custo adicional: refatorar `agente.py` para `client.responses.create` com `text.format` (Structured Outputs).
+
+---
+
+## Resumo de estado em 15/04/2026
+
+| Item | Estado |
+|------|--------|
+| Código implementado | ✅ commit b17a7ba |
+| Produção (Coolify) | ❌ QUEBRADA — gpt-5.4-mini + tools + Chat Completions |
+| Rollback disponível | ✅ via env vars no Coolify (sem código) |
+| Fix planejado | ⏳ aguardando autorização |

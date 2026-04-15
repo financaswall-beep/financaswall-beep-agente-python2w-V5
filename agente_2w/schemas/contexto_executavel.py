@@ -46,8 +46,6 @@ class ClienteContexto(BaseModel):
     total_pedidos: int = 0
     valor_total_gasto: Optional[Decimal] = None
     ultima_compra_em: Optional[datetime] = None
-    municipio: Optional[str] = None
-    bairro: Optional[str] = None
     ultimo_pedido: Optional[UltimoPedidoContexto] = None
 
 

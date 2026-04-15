@@ -1,6 +1,40 @@
 # Status do Projeto — Agente 2W Pneus
 
-Ultima atualizacao: 03/04/2026
+Ultima atualizacao: 15/04/2026
+
+---
+
+## ⚠️ SITUACAO ATUAL EM PRODUCAO — 15/04/2026
+
+| Campo | Valor |
+|-------|-------|
+| Estado | **QUEBRADO** |
+| Commit em prod | `b17a7ba` |
+| Causa | `gpt-5.4-mini` + tools + Chat Completions = `reasoning:none` → tools bloqueadas |
+| Sintoma | Todas as mensagens retornam "Desculpe, tive um problema" |
+| Fix rápido | Coolify → `OPENAI_MODEL_MINI=gpt-4o` → Redeploy |
+| Fix permanente | Corrigir `_e_modelo_reasoning()` em `agente.py` (ver CHANGELOG 15/04) |
+
+### Rollback imediato (sem código)
+No Coolify, alterar e fazer redeploy:
+```
+OPENAI_MODEL_MINI=gpt-4o
+OPENAI_MODEL_FLAGSHIP=gpt-5.4
+```
+
+### Variáveis atuais no Coolify (estado que causa o bug)
+```
+OPENAI_MODEL=gpt-5.4
+OPENAI_MODEL_MINI=gpt-5.4-mini   ← problemático
+OPENAI_MODEL_FLAGSHIP=gpt-5.4
+```
+
+### Causa técnica resumida
+A família gpt-5.x **inteira** (incluindo mini) precisa de `reasoning_effort` ao usar tools no Chat Completions API.
+O código trata mini como modelo sem reasoning → não adiciona `reasoning_effort` → `reasoning:none` automático → tools bloqueadas pela API.
+Ver `CHANGELOG_SESSAO_2026_04_15.md` para diagnóstico completo e plano de fix.
+
+---
 
 ## Fase 1 — Fundacao (COMPLETA)
 

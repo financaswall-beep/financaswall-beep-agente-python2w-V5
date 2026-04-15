@@ -78,8 +78,6 @@ def montar_contexto(sessao_id: UUID) -> ContextoExecutavel:
                 total_pedidos=cliente.total_pedidos,
                 valor_total_gasto=cliente.valor_total_gasto,
                 ultima_compra_em=cliente.ultima_compra_em,
-                municipio=cliente.municipio,
-                bairro=cliente.bairro,
                 ultimo_pedido=ultimo_pedido_ctx,
             )
 
@@ -189,15 +187,17 @@ def montar_contexto(sessao_id: UUID) -> ContextoExecutavel:
     fato_nao_coberto = next((f for f in fatos_db if f.chave == ChaveContexto.FRETE_NAO_COBERTO), None)
     if fato_frete and fato_frete.valor_texto:
         from decimal import Decimal
-        municipio_frete = (
-            cliente_ctx.municipio
-            or next((f.valor_texto for f in fatos_db if f.chave == ChaveContexto.MUNICIPIO), None)
+        municipio_frete = next(
+            (f.valor_texto for f in fatos_db if f.chave == ChaveContexto.MUNICIPIO), None
+        )
+        bairro_frete = next(
+            (f.valor_texto for f in fatos_db if f.chave == ChaveContexto.BAIRRO), None
         )
         frete_ctx = FreteContexto(
             municipio=municipio_frete or "desconhecido",
             coberto=True,
             valor_frete=Decimal(fato_frete.valor_texto),
-            bairro=cliente_ctx.bairro,
+            bairro=bairro_frete,
         )
     elif fato_nao_coberto and fato_nao_coberto.valor_texto:
         frete_ctx = FreteContexto(
