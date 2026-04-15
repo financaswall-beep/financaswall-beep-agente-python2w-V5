@@ -104,7 +104,21 @@ def _resolver_timeout(sessao) -> UUID:
             return sessao.id
 
         if situacao == SituacaoSessao.expirada_pos_pedido:
-            # Sessao com pedido criado expirou apos 48h — fechar e criar nova
+            # Sessao com pedido criado expirou apos 24h — fechar e criar nova
+            # Liberar estoque reservado do pedido antes de fechar
+            try:
+                from agente_2w.engine.promotor import expirar_pedido_sessao
+                expirou = expirar_pedido_sessao(sessao.id)
+                if expirou:
+                    logger.info(
+                        "Pedido da sessao %s expirado e estoque liberado",
+                        sessao.id,
+                    )
+            except Exception:
+                logger.exception(
+                    "Falha ao expirar pedido da sessao %s — estoque pode ficar reservado",
+                    sessao.id,
+                )
             sessao_repo.fechar_sessao(sessao.id)
             nova = sessao_repo.criar_sessao(SessaoChatCreate(
                 canal=sessao.canal,
@@ -120,6 +134,14 @@ def _resolver_timeout(sessao) -> UUID:
             return nova.id
 
         # expirada_com_contexto ou expirada_sem_contexto
+        # Liberar estoque reservado se havia pedido nesta sessao
+        try:
+            from agente_2w.engine.promotor import expirar_pedido_sessao
+            expirar_pedido_sessao(sessao.id)
+        except Exception:
+            logger.exception(
+                "Falha ao expirar pedido da sessao %s", sessao.id,
+            )
         sessao_repo.fechar_sessao(sessao.id)
         # Cancelar itens provisorios orfaos da sessao expirada
         try:

@@ -74,6 +74,7 @@ class StatusPedido(str, Enum):
     entregue = "entregue"
     nao_efetuada = "nao_efetuada"
     cancelado = "cancelado"
+    expirado = "expirado"
 
 
 class Confianca(str, Enum):

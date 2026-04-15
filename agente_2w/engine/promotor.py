@@ -125,6 +125,60 @@ def cancelar_pedido_sessao(sessao_id: UUID) -> bool:
     return True
 
 
+def expirar_pedido_sessao(sessao_id: UUID) -> bool:
+    """Expira o pedido da sessao por inatividade, libera estoque reservado e reverte stats.
+
+    Similar a cancelar_pedido_sessao, mas usa status 'expirado'
+    para diferenciar de cancelamentos explicitos do cliente.
+    Retorna True se expirou, False se nao havia pedido elegivel.
+    """
+    pedido = pedido_repo.buscar_pedido_por_sessao(sessao_id)
+    if not pedido:
+        logger.info("expirar_pedido_sessao: nenhum pedido para sessao %s", sessao_id)
+        return False
+
+    # So expira pedidos em 'confirmado' — outros status ja tem destino
+    if pedido.status_pedido.value != "confirmado":
+        logger.info(
+            "Pedido %s nao elegivel para expiracao (status=%s)",
+            pedido.id, pedido.status_pedido.value,
+        )
+        return False
+
+    pedido_repo.atualizar_status_pedido(pedido.id, "expirado")
+    logger.info("Pedido %s expirado por inatividade da sessao %s", pedido.id, sessao_id)
+
+    # Liberar estoque reservado
+    try:
+        itens = pedido_repo.listar_itens_pedido(pedido.id)
+        for item in itens:
+            catalogo_repo.decrementar_reservado(item.pneu_id, item.quantidade)
+        logger.info("Estoque liberado (expiracao): %d itens do pedido %s", len(itens), pedido.id)
+    except Exception:
+        logger.exception("Falha ao liberar estoque do pedido expirado %s", pedido.id)
+
+    # Reverter stats do cliente
+    try:
+        cliente = cliente_repo.buscar_cliente_por_id(pedido.cliente_id)
+        if cliente and cliente.total_pedidos > 0:
+            novo_total = cliente.total_pedidos - 1
+            novo_valor = max(Decimal("0"), cliente.valor_total_gasto - pedido.valor_total)
+            novo_segmento = _calcular_segmento(novo_total, novo_valor)
+            cliente_repo.atualizar_cliente(pedido.cliente_id, {
+                "total_pedidos": novo_total,
+                "valor_total_gasto": str(novo_valor),
+                "segmento": novo_segmento,
+            })
+            logger.info(
+                "Stats cliente revertidos (expiracao): pedidos=%d, valor=%.2f, segmento=%s",
+                novo_total, novo_valor, novo_segmento,
+            )
+    except Exception:
+        logger.exception("Falha ao reverter stats do cliente (expiracao)")
+
+    return True
+
+
 def alterar_pedido_sessao(sessao_id: UUID) -> bool:
     """Sincroniza forma_pagamento, tipo_entrega e endereco_entrega_json do pedido
     com os fatos ativos da sessao.
