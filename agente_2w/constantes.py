@@ -36,6 +36,9 @@ class ChaveContexto:
     PEDIDO_CANCELAMENTO_SOLICITADO = "pedido_cancelamento_solicitado"
     ERRO_PROMOCAO = "erro_promocao"  # erros de pre-condicao ao tentar criar pedido
 
+    # ─── Estoque ─────────────────────────────────────────────────────────────
+    ESTOQUE_ESGOTADO = "estoque_esgotado"  # pneu selecionado pelo cliente esgotou
+
     # ─── Escalacao para atendimento humano ────────────────────────────────────
     ESCALAR_PARA_HUMANO = "escalar_para_humano"
     CLIENTE_ATACADO = "cliente_atacado"

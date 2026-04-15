@@ -223,6 +223,29 @@ def alterar_pedido_sessao(sessao_id: UUID) -> bool:
         if novo_endereco and novo_endereco != pedido.endereco_entrega_json:
             campos["endereco_entrega_json"] = novo_endereco
 
+    # B5: Recalcular valor_total/valor_frete quando contexto muda
+    fato_frete_b5 = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.FRETE_VALOR)
+    fato_tipo_b5 = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.TIPO_ENTREGA)
+    novo_frete = Decimal("0")
+    if fato_tipo_b5 and fato_tipo_b5.valor_texto:
+        if _normalizar(fato_tipo_b5.valor_texto) == TipoEntrega.entrega.value:
+            if fato_frete_b5 and fato_frete_b5.valor_texto:
+                try:
+                    novo_frete = Decimal(fato_frete_b5.valor_texto)
+                except (ValueError, ArithmeticError):
+                    pass
+    if novo_frete != pedido.valor_frete:
+        itens_pedido = pedido_repo.listar_itens_pedido(pedido.id)
+        valor_itens = sum(
+            item.preco_unitario * item.quantidade for item in itens_pedido
+        )
+        campos["valor_frete"] = str(novo_frete)
+        campos["valor_total"] = str(valor_itens + novo_frete)
+        logger.info(
+            "B5: Pedido %s recalculado: frete=%s->%s total=%s",
+            pedido.id, pedido.valor_frete, novo_frete, valor_itens + novo_frete,
+        )
+
     if not campos:
         return False
 

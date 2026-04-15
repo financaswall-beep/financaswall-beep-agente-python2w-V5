@@ -240,6 +240,18 @@ async def _recovery_cliente_perdido() -> int:
             if not (min_min <= inativo_min < max_min):
                 continue
 
+            # B4: Verificar se sessao ainda esta aberta antes de enviar
+            sessao_atual = await asyncio.to_thread(
+                sessao_repo.buscar_sessao_por_id, UUID(s["id"])
+            )
+            if not sessao_atual or sessao_atual.status_sessao != StatusSessao.ativa:
+                logger.debug(
+                    "Recovery ignorado: sessao=%s nao mais ativa (status=%s)",
+                    s["id"],
+                    sessao_atual.status_sessao.value if sessao_atual else "None",
+                )
+                continue
+
             conv_id = s["chatwoot_conv_id"]
             await _enviar_mensagem_chatwoot(conv_id, mensagem)
             await asyncio.to_thread(chatwoot_sync.adicionar_label, conv_id, "cliente_perdido")

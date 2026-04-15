@@ -315,6 +315,16 @@ def montar_contexto(sessao_id: UUID) -> ContextoExecutavel:
             "ou registre alteracoes se solicitado."
         )
 
+    # L5 + B1: Alerta de estoque esgotado para itens que foram cancelados
+    if ChaveContexto.ESTOQUE_ESGOTADO in chaves_ativas:
+        fato_esgotado = next((f for f in fatos_db if f.chave == ChaveContexto.ESTOQUE_ESGOTADO), None)
+        if fato_esgotado:
+            alertas.append(
+                f"ESTOQUE ESGOTADO: o pneu '{fato_esgotado.valor_texto}' que o cliente havia escolhido "
+                "acabou de esgotar e foi removido do carrinho. Informe o cliente com empatia "
+                "(ex: 'Poxa, infelizmente o [pneu] acabou de ser vendido!') e ofereca buscar alternativas."
+            )
+
     # Alerta: estoque critico (quantidade <= 3) — LLM menciona de passagem
     fato_pneus_raw = next(
         (f for f in fatos_db if f.chave == ChaveContexto.ULTIMOS_PNEUS_ENCONTRADOS), None

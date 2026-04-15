@@ -1004,6 +1004,41 @@ def processar_turno(
         except Exception:
             logger.exception("Falha ao verificar urgencia VIP")
 
+    # --- 2c. Verificar estoque de itens confirmados (B1) ---
+    # Se algum item do cliente ficou sem estoque desde o ultimo turno,
+    # cancela o item e registra fato para a IA avisar o cliente.
+    try:
+        _itens_2c = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
+        for _item_2c in _itens_2c:
+            if not _item_2c.pneu_id:
+                continue
+            from agente_2w.db import catalogo_repo as _cat_2c
+            _estoque_2c = _cat_2c.buscar_estoque_por_pneu(_item_2c.pneu_id)
+            if not _estoque_2c:
+                continue
+            _disp_2c = _estoque_2c.quantidade_disponivel - _estoque_2c.reservado
+            if _disp_2c <= 0:
+                _pneu_2c = _cat_2c.buscar_pneu_por_id(_item_2c.pneu_id)
+                _nome_2c = _pneu_2c.descricao_comercial if _pneu_2c else str(_item_2c.pneu_id)
+                item_provisorio_repo.atualizar_status_item(
+                    _item_2c.id, StatusItemProvisorio.cancelado,
+                )
+                contexto_repo.registrar_fato(ContextoConversaCreate(
+                    sessao_chat_id=sessao_id,
+                    chave=ChaveContexto.ESTOQUE_ESGOTADO,
+                    valor_texto=_nome_2c,
+                    valor_json=None,
+                    tipo_de_verdade=TipoDeVerdade.validado_tool,
+                    nivel_confirmacao=NivelConfirmacao.nenhum,
+                    fonte=OrigemContexto.backend,
+                ))
+                logger.info(
+                    "B1: item %s cancelado (estoque esgotado): pneu=%s '%s'",
+                    _item_2c.id, _item_2c.pneu_id, _nome_2c,
+                )
+    except Exception:
+        logger.exception("Falha no check de estoque B1")
+
     # --- 3. Montar contexto executavel ---
     try:
         contexto = montar_contexto(sessao_id)
@@ -1314,6 +1349,21 @@ def processar_turno(
                                 )
                             except Exception:
                                 logger.exception("Rede de seguranca 9d falhou")
+
+    # --- 9e. Escalacao: pedido com 3+ itens (handoff volume) ---
+    try:
+        _itens_9e = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
+        _itens_com_pneu_9e = [i for i in _itens_9e if i.pneu_id]
+        if len(_itens_com_pneu_9e) >= 3:
+            _esc_9e = escalacao_repo.buscar_escalacao_ativa(sessao_id)
+            if not _esc_9e:
+                _processar_escalacao(sessao_id, chatwoot_conv_id, "pedido_volume", "codigo")
+                logger.info(
+                    "Handoff 3+: %d itens na sessao %s — escalando",
+                    len(_itens_com_pneu_9e), sessao_id,
+                )
+    except Exception:
+        logger.exception("Falha no handoff 3+ itens")
 
     # --- 10. Despachar acoes sugeridas ---
     # Caso especial: se o mini propoe fechamento + converter_em_pedido no mesmo turno,
