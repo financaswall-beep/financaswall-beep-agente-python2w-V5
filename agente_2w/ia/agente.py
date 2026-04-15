@@ -6,7 +6,7 @@ import logging
 from openai import OpenAI, RateLimitError, APITimeoutError, APIConnectionError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-from agente_2w.config import OPENAI_API_KEY, OPENAI_MODEL, MAX_TOOL_ROUNDS
+from agente_2w.config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_MODEL_MINI, OPENAI_MODEL_FLAGSHIP, MAX_TOOL_ROUNDS
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,23 @@ _TOOL_DISPATCH: dict = {
 _RETRY_EXCEPTIONS = (RateLimitError, APITimeoutError, APIConnectionError)
 
 
+def _e_modelo_reasoning(modelo: str) -> bool:
+    """True se o modelo usa reasoning tokens (gpt-5.4 flagship, nao mini nem nano).
+
+    gpt-5.4 exige reasoning_effort para usar tool_calls no Chat Completions.
+    gpt-5.4-mini e gpt-5.4-nano sao modelos normais (sem restricao de reasoning).
+    """
+    m = modelo.lower()
+    return "gpt-5." in m and "mini" not in m and "nano" not in m
+
+
+def _escolher_modelo(tentativa: int, tem_imagem: bool) -> str:
+    """Roteia para FLAGSHIP em retries/imagens, MINI no resto."""
+    if tentativa > 1 or tem_imagem:
+        return OPENAI_MODEL_FLAGSHIP
+    return OPENAI_MODEL_MINI
+
+
 @retry(
     retry=retry_if_exception_type(_RETRY_EXCEPTIONS),
     stop=stop_after_attempt(3),
@@ -60,12 +77,18 @@ _RETRY_EXCEPTIONS = (RateLimitError, APITimeoutError, APIConnectionError)
     ),
     reraise=True,
 )
-def _chamar_openai(messages: list, tools=None) -> object:
-    """Chamada OpenAI com retry automatico para rate limit e timeout."""
+def _chamar_openai(messages: list, tools=None, model: str | None = None) -> object:
+    """Chamada OpenAI com retry automatico para rate limit e timeout.
+
+    Nota sobre gpt-5.4 (reasoning model):
+    - Com tools: usa reasoning_effort='low' (obrigatorio; reasoning:none bloqueia tool_calls)
+    - Sem tools: usa temperature=0.3 normalmente (reasoning:none funciona sem tools)
+    - gpt-5.4-mini/nano: nao sao reasoning models, temperature sempre funciona.
+    """
+    modelo = model or OPENAI_MODEL
     kwargs = {
-        "model": OPENAI_MODEL,
+        "model": modelo,
         "messages": messages,
-        "temperature": 0.3,
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -79,6 +102,13 @@ def _chamar_openai(messages: list, tools=None) -> object:
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
         kwargs["parallel_tool_calls"] = False  # obrigatorio com structured outputs
+        if _e_modelo_reasoning(modelo):
+            # gpt-5.4+: reasoning_effort necessario para habilitar tool_calls no Chat Completions
+            kwargs["reasoning_effort"] = "low"
+        else:
+            kwargs["temperature"] = 0.3
+    else:
+        kwargs["temperature"] = 0.3
     return _client.chat.completions.create(**kwargs)
 
 
@@ -95,12 +125,15 @@ def chamar_agente(
     contexto: ContextoExecutavel,
     mensagem_usuario: str,
     imagens: list[str] | None = None,
+    tentativa: int = 1,
 ) -> tuple[str, list[dict]]:
     """Envia mensagem do usuário + contexto para o modelo e processa tool calls.
 
     Args:
         imagens: lista de URLs de imagens enviadas pelo cliente (opcional).
                  Quando presente, o content do usuário vira array multimodal.
+        tentativa: numero da tentativa (1 = primeira, 2+ = retry). Usado para
+                   rotear para o modelo FLAGSHIP em retries.
 
     Retorna tupla:
         - texto bruto da resposta final do modelo (JSON do EnvelopeIA)
@@ -126,6 +159,9 @@ def chamar_agente(
     prompt_sistema = construir_prompt(etapa_atual or "identificacao")
     logger.info("[V3] prompt_dinamico etapa=%s chars=%d", etapa_atual, len(prompt_sistema))
 
+    modelo = _escolher_modelo(tentativa, bool(imagens))
+    logger.info("[ROUTER] modelo=%s imagem=%s tentativa=%d", modelo, bool(imagens), tentativa)
+
     messages = [
         {"role": "system", "content": prompt_sistema},
         {
@@ -148,7 +184,7 @@ def chamar_agente(
     }
 
     for round_num in range(MAX_TOOL_ROUNDS):
-        response = _chamar_openai(messages, tools=TOOLS_SCHEMA)
+        response = _chamar_openai(messages, tools=TOOLS_SCHEMA, model=modelo)
         choice = response.choices[0]
 
         # Se não tem tool calls, retornar a resposta final
@@ -175,5 +211,5 @@ def chamar_agente(
 
     # Se esgotou os rounds, fazer uma última chamada sem tools
     logger.warning("Esgotou %d rounds de tool calls, chamando sem tools", MAX_TOOL_ROUNDS)
-    response = _chamar_openai(messages)
+    response = _chamar_openai(messages, model=modelo)
     return response.choices[0].message.content or "", pneus_encontrados

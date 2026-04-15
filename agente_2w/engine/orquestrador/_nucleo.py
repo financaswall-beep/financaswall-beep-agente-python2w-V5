@@ -208,7 +208,9 @@ def _chamar_e_validar(contexto, mensagem_texto: str, imagens: list[str] | None =
         try:
             # Imagens só na primeira tentativa — retry usa só texto de correção
             imgs = imagens if tentativa == 0 else None
-            resposta_bruta, pneus_da_chamada = chamar_agente(contexto, msg, imagens=imgs)
+            resposta_bruta, pneus_da_chamada = chamar_agente(
+                contexto, msg, imagens=imgs, tentativa=tentativa + 1,
+            )
             todos_pneus.extend(pneus_da_chamada)
         except Exception:
             logger.exception("Erro na chamada da IA (tentativa %d)", tentativa)

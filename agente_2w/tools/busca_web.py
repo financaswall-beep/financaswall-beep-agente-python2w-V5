@@ -12,7 +12,7 @@ from uuid import UUID
 
 from openai import OpenAI
 
-from agente_2w.config import OPENAI_API_KEY, OPENAI_MODEL
+from agente_2w.config import OPENAI_API_KEY, OPENAI_MODEL_MINI
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ def buscar_medida_por_moto_web(moto: str, posicao: str, sessao_id: UUID | None =
 
     try:
         response = _client.responses.create(
-            model=OPENAI_MODEL,
+            model=OPENAI_MODEL_MINI,
             input=query,
             tools=[{
                 "type": "web_search_preview",

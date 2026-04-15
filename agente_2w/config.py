@@ -9,6 +9,13 @@ SUPABASE_KEY: str = os.environ["SUPABASE_KEY"]
 OPENAI_API_KEY: str = os.environ["OPENAI_API_KEY"]
 OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o")
 
+# ─── Roteamento de modelos (2 tiers) ──────────────────────────────────────────
+# MINI  : ~70% dos turnos (turnos normais). Barato e rapido.
+# FLAGSHIP: retries e mensagens com imagem. Mais inteligente.
+# Rollback : sete OPENAI_MODEL_MINI=gpt-4o para desligar roteamento sem tocar codigo.
+OPENAI_MODEL_MINI: str = os.getenv("OPENAI_MODEL_MINI", OPENAI_MODEL)
+OPENAI_MODEL_FLAGSHIP: str = os.getenv("OPENAI_MODEL_FLAGSHIP", OPENAI_MODEL)
+
 # ─── Limites de execucao ──────────────────────────────────────────────────────
 # Quantos retries a IA ganha quando o envelope vem invalido
 MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "2"))
