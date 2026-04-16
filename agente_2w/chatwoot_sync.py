@@ -268,7 +268,13 @@ def mover_kanban(conv_id: int, board_step_id: int) -> None:
         logger.warning("Falha ao mover Kanban para conv %d", conv_id, exc_info=True)
 
 
-def sincronizar_etapa(conv_id: int, etapa: str) -> None:
+def sincronizar_etapa(
+    conv_id: int,
+    etapa: str,
+    nome_cliente: str | None = None,
+    moto: str | None = None,
+    medida: str | None = None,
+) -> None:
     """Adiciona a label e move o lead no Kanban conforme a etapa atual."""
     label = _LABEL_POR_ETAPA.get(etapa)
     if not label:
@@ -278,9 +284,16 @@ def sincronizar_etapa(conv_id: int, etapa: str) -> None:
     step_id = _KANBAN_STEP_POR_ETAPA.get(etapa)
     if step_id:
         mover_kanban(conv_id, step_id)
-    descricao = _DESCRICAO_ETAPA.get(etapa)
-    if descricao and _habilitado():
-        _atualizar_task_kanban(conv_id, {"description": descricao})
+    etapa_legivel = _DESCRICAO_ETAPA.get(etapa, etapa)
+    partes: list[str] = [etapa_legivel]
+    if nome_cliente:
+        partes.append(nome_cliente)
+    if moto:
+        partes.append(moto)
+    if medida:
+        partes.append(medida)
+    if _habilitado():
+        _atualizar_task_kanban(conv_id, {"description": " | ".join(partes)})
 
 
 def sincronizar_nome_cliente(contact_id: int, nome: str) -> None:
@@ -335,14 +348,26 @@ def sincronizar_pedido_criado(
     forma_pagamento: str | None = None,
     tipo_entrega: str | None = None,
     municipio: str | None = None,
+    nome_cliente: str | None = None,
+    moto: str | None = None,
+    medida: str | None = None,
 ) -> None:
     """Adiciona label pedido_criado, nota privada e custom attributes na conversa."""
     adicionar_label(conv_id, "pedido_criado")
     mover_kanban(conv_id, _KANBAN_STEP_PEDIDO_CRIADO)
     valor_fmt = f"R$ {float(valor_total):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     nota_privada(conv_id, f"Pedido #{numero_pedido} criado — {valor_fmt}")
-    # Preencher task Kanban com titulo, descricao e valor da oportunidade
-    _desc_partes = [f"Pedido #{numero_pedido}", valor_fmt]
+    # Preencher task Kanban com resumo legivel para o funcionario
+    _titulo = f"Pedido #{numero_pedido}"
+    if nome_cliente:
+        _titulo += f" — {nome_cliente}"
+    _desc_partes: list[str] = [f"Pedido #{numero_pedido} — {valor_fmt}"]
+    if nome_cliente:
+        _desc_partes.append(nome_cliente)
+    if moto:
+        _desc_partes.append(moto)
+    if medida:
+        _desc_partes.append(medida)
     if forma_pagamento:
         _desc_partes.append(forma_pagamento)
     if tipo_entrega:
@@ -350,7 +375,7 @@ def sincronizar_pedido_criado(
     if municipio:
         _desc_partes.append(municipio)
     _atualizar_task_kanban(conv_id, {
-        "title": f"Pedido #{numero_pedido}",
+        "title": _titulo,
         "description": " | ".join(_desc_partes),
         "deal_value": float(valor_total),
     })
@@ -369,13 +394,26 @@ def sincronizar_pedido_criado(
     atualizar_conversa_attrs(conv_id, attrs)
 
 
-def sincronizar_cancelamento(conv_id: int, numero_pedido: int | str | None = None) -> None:
+def sincronizar_cancelamento(
+    conv_id: int,
+    numero_pedido: int | str | None = None,
+    nome_cliente: str | None = None,
+    moto: str | None = None,
+    medida: str | None = None,
+) -> None:
     """Adiciona label pedido_cancelado, move para Oportunidade Perdida e cria nota."""
     adicionar_label(conv_id, "pedido_cancelado")
     mover_kanban(conv_id, _KANBAN_STEP_CANCELADO)
-    texto = f"Pedido #{numero_pedido} cancelado pelo cliente" if numero_pedido else "Pedido cancelado pelo cliente"
-    nota_privada(conv_id, texto)
-    _atualizar_task_kanban(conv_id, {"description": texto})
+    texto_base = f"Pedido #{numero_pedido} cancelado pelo cliente" if numero_pedido else "Cancelado pelo cliente"
+    nota_privada(conv_id, texto_base)
+    _partes_cancel: list[str] = [texto_base]
+    if nome_cliente:
+        _partes_cancel.append(nome_cliente)
+    if moto:
+        _partes_cancel.append(moto)
+    if medida:
+        _partes_cancel.append(medida)
+    _atualizar_task_kanban(conv_id, {"description": " | ".join(_partes_cancel)})
 
 
 def definir_prioridade(conv_id: int, prioridade: str) -> None:

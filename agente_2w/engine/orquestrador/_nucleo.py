@@ -1228,9 +1228,15 @@ def processar_turno(
             if chatwoot_conv_id:
                 from agente_2w.db import pedido_repo as _ped_repo
                 _pedido = _ped_repo.buscar_pedido_por_sessao(sessao_id)
+                _fato_moto_c = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.MOTO_MODELO)
+                _fato_medida_c = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.MEDIDA_INFORMADA)
+                _fato_nome_c = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.NOME_CLIENTE)
                 chatwoot_sync.sincronizar_cancelamento(
                     chatwoot_conv_id,
                     numero_pedido=_pedido.numero_pedido if _pedido else None,
+                    nome_cliente=_fato_nome_c.valor_texto if _fato_nome_c else None,
+                    moto=_fato_moto_c.valor_texto if _fato_moto_c else None,
+                    medida=_fato_medida_c.valor_texto if _fato_medida_c else None,
                 )
                 chatwoot_sync.resolver_conversa(chatwoot_conv_id)
 
@@ -1526,7 +1532,9 @@ def processar_turno(
 
     # --- 11. Avaliar transicao de etapa ---
     _avaliar_transicao(sessao_id, contexto.sessao.etapa_atual, envelope.etapa_atual)
-    if chatwoot_conv_id:
+    # Nao sobrescrever o step do Kanban quando pedido acabou de ser criado
+    # (sincronizar_pedido_criado ja moveu para Oportunidade Ganha)
+    if chatwoot_conv_id and not pedido_criado:
         _etapa_antiga = contexto.sessao.etapa_atual
         _etapa_efetiva = (
             envelope.etapa_atual
@@ -1534,7 +1542,16 @@ def processar_turno(
             or transicao_permitida(_etapa_antiga, envelope.etapa_atual)
             else _etapa_antiga
         )
-        chatwoot_sync.sincronizar_etapa(chatwoot_conv_id, _etapa_efetiva.value)
+        _fato_nome_k = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.NOME_CLIENTE)
+        _fato_moto_k = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.MOTO_MODELO)
+        _fato_medida_k = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.MEDIDA_INFORMADA)
+        chatwoot_sync.sincronizar_etapa(
+            chatwoot_conv_id,
+            _etapa_efetiva.value,
+            nome_cliente=_fato_nome_k.valor_texto if _fato_nome_k else None,
+            moto=_fato_moto_k.valor_texto if _fato_moto_k else None,
+            medida=_fato_medida_k.valor_texto if _fato_medida_k else None,
+        )
 
     # --- 11b. Detector de loop: mesma etapa repetida com cliente confirmando ---
     try:
@@ -1585,6 +1602,9 @@ def processar_turno(
                 )
                 if chatwoot_conv_id:
                     _municipio_fato = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.MUNICIPIO)
+                    _fato_nome_ap = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.NOME_CLIENTE)
+                    _fato_moto_ap = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.MOTO_MODELO)
+                    _fato_medida_ap = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.MEDIDA_INFORMADA)
                     chatwoot_sync.sincronizar_pedido_criado(
                         chatwoot_conv_id,
                         pedido_criado.numero_pedido,
@@ -1592,6 +1612,9 @@ def processar_turno(
                         forma_pagamento=pedido_criado.forma_pagamento.value,
                         tipo_entrega=pedido_criado.tipo_entrega.value,
                         municipio=_municipio_fato.valor_texto if _municipio_fato else None,
+                        nome_cliente=_fato_nome_ap.valor_texto if _fato_nome_ap else None,
+                        moto=_fato_moto_ap.valor_texto if _fato_moto_ap else None,
+                        medida=_fato_medida_ap.valor_texto if _fato_medida_ap else None,
                     )
                 sessao_atual = sessao_repo.buscar_sessao_por_id(sessao_id)
                 if sessao_atual and sessao_atual.cliente_id:
