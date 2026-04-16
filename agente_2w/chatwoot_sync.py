@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from agente_2w.config import CHATWOOT_API_TOKEN, CHATWOOT_ACCOUNT_ID, CHATWOOT_BASE_URL
+from agente_2w.config import CHATWOOT_API_TOKEN, CHATWOOT_ACCOUNT_ID, CHATWOOT_BASE_URL, CHATWOOT_KANBAN_BOARD_ID
 
 if TYPE_CHECKING:
     from agente_2w.schemas.cliente import Cliente
@@ -36,6 +36,20 @@ _LABEL_POR_ETAPA: dict[str, str] = {
     "entrega_pagamento": "dados_entrega",
     "fechamento": "em_fechamento",
 }
+
+# Mapeamento etapa -> board_step_id do Kanban (Pipeline de Vendas, board_id=3)
+# IDs das colunas: 21=Novo Lead, 22=Qualificando, 23=Proposta Enviada,
+#                  24=Negociação, 25=Oportunidade Perdida, 26=Oportunidade Ganha
+_KANBAN_STEP_POR_ETAPA: dict[str, int] = {
+    "identificacao": 21,   # Novo Lead
+    "busca": 22,           # Qualificando
+    "oferta": 23,          # Proposta Enviada
+    "confirmacao_item": 24,    # Negociação
+    "entrega_pagamento": 24,   # Negociação
+    "fechamento": 24,          # Negociação
+}
+_KANBAN_STEP_PEDIDO_CRIADO = 26  # Oportunidade Ganha
+_KANBAN_STEP_CANCELADO = 25      # Oportunidade Perdida
 
 # Cliente HTTP reutilizavel (singleton lazy)
 _http: httpx.Client | None = None
@@ -135,13 +149,51 @@ def ativar_typing(conv_id: int) -> None:
         pass  # silencioso — UX only, nao pode travar o fluxo
 
 
+def _buscar_task_por_conversa(conv_id: int) -> int | None:
+    """Busca o task_id no Kanban pela conversa interna do Chatwoot."""
+    if not CHATWOOT_KANBAN_BOARD_ID:
+        return None
+    try:
+        url = f"{_base()}/kanban/tasks?board_id={CHATWOOT_KANBAN_BOARD_ID}"
+        resp = _client().get(url, headers=_headers())
+        resp.raise_for_status()
+        tasks = resp.json().get("tasks", [])
+        for task in tasks:
+            for conv in task.get("conversations", []):
+                if conv.get("id") == conv_id:
+                    return task["id"]
+    except Exception:
+        logger.warning("Falha ao buscar task Kanban para conv %d", conv_id, exc_info=True)
+    return None
+
+
+def mover_kanban(conv_id: int, board_step_id: int) -> None:
+    """Move a task do Kanban para a coluna especificada (fail-safe)."""
+    if not _habilitado() or not CHATWOOT_KANBAN_BOARD_ID or not conv_id:
+        return
+    try:
+        task_id = _buscar_task_por_conversa(conv_id)
+        if not task_id:
+            logger.debug("Kanban: nenhuma task encontrada para conv %d", conv_id)
+            return
+        url = f"{_base()}/kanban/tasks/{task_id}"
+        resp = _client().patch(url, json={"board_step_id": board_step_id}, headers=_headers())
+        resp.raise_for_status()
+        logger.info("Kanban: task %d → step %d (conv %d)", task_id, board_step_id, conv_id)
+    except Exception:
+        logger.warning("Falha ao mover Kanban para conv %d", conv_id, exc_info=True)
+
+
 def sincronizar_etapa(conv_id: int, etapa: str) -> None:
-    """Adiciona a label correspondente a etapa atual do fluxo de vendas."""
+    """Adiciona a label e move o lead no Kanban conforme a etapa atual."""
     label = _LABEL_POR_ETAPA.get(etapa)
     if not label:
         logger.debug("Etapa '%s' sem label mapeada — ignorando sync", etapa)
         return
     adicionar_label(conv_id, label)
+    step_id = _KANBAN_STEP_POR_ETAPA.get(etapa)
+    if step_id:
+        mover_kanban(conv_id, step_id)
 
 
 def sincronizar_nome_cliente(contact_id: int, nome: str) -> None:
@@ -192,6 +244,7 @@ def sincronizar_pedido_criado(
 ) -> None:
     """Adiciona label pedido_criado, nota privada e custom attributes na conversa."""
     adicionar_label(conv_id, "pedido_criado")
+    mover_kanban(conv_id, _KANBAN_STEP_PEDIDO_CRIADO)
     valor_fmt = f"R$ {float(valor_total):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     nota_privada(conv_id, f"Pedido #{numero_pedido} criado — {valor_fmt}")
 
@@ -210,8 +263,9 @@ def sincronizar_pedido_criado(
 
 
 def sincronizar_cancelamento(conv_id: int, numero_pedido: int | str | None = None) -> None:
-    """Adiciona label pedido_cancelado e nota privada informando o cancelamento."""
+    """Adiciona label pedido_cancelado, move para Oportunidade Perdida e cria nota."""
     adicionar_label(conv_id, "pedido_cancelado")
+    mover_kanban(conv_id, _KANBAN_STEP_CANCELADO)
     texto = f"Pedido #{numero_pedido} cancelado pelo cliente" if numero_pedido else "Pedido cancelado pelo cliente"
     nota_privada(conv_id, texto)
 
