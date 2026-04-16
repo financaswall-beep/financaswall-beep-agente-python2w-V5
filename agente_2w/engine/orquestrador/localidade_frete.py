@@ -157,6 +157,9 @@ def _consultar_e_registrar_frete(sessao_id: UUID) -> None:
                 break
 
         fato_bairro = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.BAIRRO)
+        if not fato_bairro:
+            # A IA às vezes persiste como "bairro_entrega" — aceitar ambos
+            fato_bairro = contexto_repo.buscar_fato_ativo(sessao_id, "bairro_entrega")
         if fato_bairro and fato_bairro.valor_texto:
             bairro = fato_bairro.valor_texto
 

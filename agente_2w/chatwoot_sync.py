@@ -332,11 +332,33 @@ def sincronizar_etapa(
         return
     adicionar_label(conv_id, label)
     step_id = _KANBAN_STEP_POR_ETAPA.get(etapa)
-    if step_id:
-        mover_kanban(conv_id, step_id)
     etapa_legivel = _DESCRICAO_ETAPA.get(etapa, etapa)
     linha = _montar_linha_etapa(etapa_legivel, nome_cliente, moto, medida)
-    _acumular_descricao(conv_id, linha)
+
+    # Consolidar description + step_id num PATCH único para evitar reversão de step
+    if not _habilitado():
+        return
+    task = _buscar_task_dict(conv_id)
+    if not task:
+        if step_id:
+            _criar_task_kanban(conv_id, step_id)
+        return
+    desc_atual = (task.get("description") or "").strip()
+    dados: dict = {}
+    if linha not in desc_atual:
+        nova_desc = f"{desc_atual}\n{linha}".strip() if desc_atual else linha
+        dados["description"] = nova_desc
+    if step_id:
+        dados["board_step_id"] = step_id
+    if dados:
+        try:
+            _client().patch(
+                f"{_base()}/kanban/tasks/{task['id']}",
+                json=dados,
+                headers=_headers(),
+            ).raise_for_status()
+        except Exception:
+            logger.warning("Falha ao sincronizar etapa no Kanban conv %d", conv_id, exc_info=True)
 
 
 def sincronizar_nome_cliente(contact_id: int, nome: str) -> None:
@@ -397,7 +419,6 @@ def sincronizar_pedido_criado(
 ) -> None:
     """Adiciona label pedido_criado, nota privada e custom attributes na conversa."""
     adicionar_label(conv_id, "pedido_criado")
-    mover_kanban(conv_id, _KANBAN_STEP_PEDIDO_CRIADO)
     valor_fmt = f"R$ {float(valor_total):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     nota_privada(conv_id, f"Pedido #{numero_pedido} criado — {valor_fmt}")
     # Preencher task Kanban com resumo legivel para o funcionario
@@ -421,9 +442,13 @@ def sincronizar_pedido_criado(
         _resumo_partes.append(f"Cidade: {municipio}")
     _bloco_pedido = f"\n✅ PEDIDO #{numero_pedido} CONFIRMADO\n" + "\n".join(_resumo_partes)
     _acumular_descricao(conv_id, _bloco_pedido)
+    # PATCH único final: title + valor + board_step_id (step 26 = Oportunidade Ganha)
+    # Deve ser o ÚLTIMO patch para garantir que o step não seja revertido
+    # Nota: "value" é read-only (calculado de products), então usamos custom_attributes
     _atualizar_task_kanban(conv_id, {
         "title": _titulo,
-        "deal_value": float(valor_total),
+        "custom_attributes": {"valor_pedido": float(valor_total)},
+        "board_step_id": _KANBAN_STEP_PEDIDO_CRIADO,
     })
 
     # Custom attributes na conversa (barra lateral)
@@ -449,13 +474,14 @@ def sincronizar_cancelamento(
 ) -> None:
     """Adiciona label pedido_cancelado, move para Oportunidade Perdida e cria nota."""
     adicionar_label(conv_id, "pedido_cancelado")
-    mover_kanban(conv_id, _KANBAN_STEP_CANCELADO)
     texto_base = f"Pedido #{numero_pedido} cancelado pelo cliente" if numero_pedido else "Cancelado pelo cliente"
     nota_privada(conv_id, texto_base)
     _bloco = f"\n❌ {texto_base}"
     if nome_cliente:
         _bloco += f" | {nome_cliente}"
     _acumular_descricao(conv_id, _bloco)
+    # Mover para Oportunidade Perdida como ÚLTIMO patch (evita reversão)
+    _atualizar_task_kanban(conv_id, {"board_step_id": _KANBAN_STEP_CANCELADO})
 
 def injetar_resumo_conversa(conv_id: int, sessao_id: UUID) -> None:
     """Gera um resumo da conversa com o mini model e injeta na task Kanban (fail-safe)."""

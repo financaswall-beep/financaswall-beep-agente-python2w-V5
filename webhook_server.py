@@ -45,8 +45,28 @@ logger = logging.getLogger("webhook")
 CHATWOOT_BASE_URL = os.environ["CHATWOOT_BASE_URL"].rstrip("/")
 CHATWOOT_API_TOKEN = os.environ["CHATWOOT_API_TOKEN"]
 CHATWOOT_ACCOUNT_ID = os.environ["CHATWOOT_ACCOUNT_ID"]
-CHATWOOT_INBOX_ID = os.getenv("CHATWOOT_INBOX_ID")
+CHATWOOT_INBOX_ID = os.getenv("CHATWOOT_INBOX_ID")  # legacy, aceita valor unico
 CHATWOOT_WEBHOOK_SECRET = os.getenv("CHATWOOT_WEBHOOK_SECRET", "")
+
+# Multi-inbox: aceita lista separada por virgula (ex: "4,21,22")
+# Se CHATWOOT_INBOX_IDS estiver definido, sobrescreve CHATWOOT_INBOX_ID
+_raw_inbox_ids = os.getenv("CHATWOOT_INBOX_IDS", CHATWOOT_INBOX_ID or "")
+CHATWOOT_INBOX_IDS: set[str] = {
+    x.strip() for x in _raw_inbox_ids.split(",") if x.strip()
+}
+
+# Mapeamento inbox_id → canal para sessao_chat
+# Configura via CHATWOOT_INBOX_CANAL (ex: "4:whatsapp,21:instagram,22:facebook")
+_INBOX_CANAL_MAP: dict[str, str] = {}
+for _par in os.getenv("CHATWOOT_INBOX_CANAL", "").split(","):
+    if ":" in _par:
+        _k, _v = _par.split(":", 1)
+        _INBOX_CANAL_MAP[_k.strip()] = _v.strip()
+
+
+def _canal_por_inbox(inbox_id) -> str:
+    """Retorna o canal (whatsapp/instagram/facebook) pelo inbox_id."""
+    return _INBOX_CANAL_MAP.get(str(inbox_id), "whatsapp")
 
 # ---------------------------------------------------------------------------
 # Dedup thread-safe (LRU)
@@ -418,7 +438,7 @@ def _verificar_assinatura(body: bytes, signature: str, timestamp: str = "") -> b
     return any(hmac.compare_digest(expected, signature) for expected in expected_candidates)
 
 
-def _obter_ou_criar_sessao(telefone: str) -> object:
+def _obter_ou_criar_sessao(telefone: str, canal: str = "whatsapp") -> object:
     """Busca sessao ativa pelo telefone ou cria nova (thread-safe).
 
     Retorna o objeto SessaoChat completo para acesso a .id e outros campos.
@@ -434,12 +454,12 @@ def _obter_ou_criar_sessao(telefone: str) -> object:
             return sessao
 
         sessao = sessao_repo.criar_sessao(SessaoChatCreate(
-            canal="whatsapp",
+            canal=canal,
             contato_externo=telefone,
             etapa_atual=EtapaFluxo.identificacao,
             status_sessao=StatusSessao.ativa,
         ))
-        logger.info("Nova sessao criada: %s para %s", sessao.id, telefone)
+        logger.info("Nova sessao criada: %s para %s (canal=%s)", sessao.id, telefone, canal)
         return sessao
 
 
@@ -725,12 +745,12 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
         else f"cw_{conversation_id}_{datetime.now(timezone.utc).timestamp()}"
     )
 
-    # 7. Filtrar por inbox (opcional)
-    if CHATWOOT_INBOX_ID and str(inbox_id) != str(CHATWOOT_INBOX_ID):
+    # 7. Filtrar por inbox (opcional — aceita multiplos)
+    if CHATWOOT_INBOX_IDS and str(inbox_id) not in CHATWOOT_INBOX_IDS:
         logger.info(
-            "Webhook ignorado: inbox_id=%s esperado=%s",
+            "Webhook ignorado: inbox_id=%s esperados=%s",
             inbox_id,
-            CHATWOOT_INBOX_ID,
+            CHATWOOT_INBOX_IDS,
         )
         return {"status": "ignored", "reason": "wrong_inbox"}
 
@@ -842,7 +862,9 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                     if texto_audio:
                         content = f"{content} {texto_audio}".strip() if content else texto_audio
 
-                sessao = await asyncio.to_thread(_obter_ou_criar_sessao, telefone)
+                sessao = await asyncio.to_thread(
+                    _obter_ou_criar_sessao, telefone, _canal_por_inbox(inbox_id),
+                )
 
                 # Persistir IDs do Chatwoot na sessao (idempotente, fail-safe)
                 if conversation_id and not sessao.chatwoot_conv_id:
