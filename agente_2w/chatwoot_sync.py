@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from decimal import Decimal
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import httpx
 
@@ -456,6 +457,53 @@ def sincronizar_cancelamento(
         _bloco += f" | {nome_cliente}"
     _acumular_descricao(conv_id, _bloco)
 
+def injetar_resumo_conversa(conv_id: int, sessao_id: UUID) -> None:
+    """Gera um resumo da conversa com o mini model e injeta na task Kanban (fail-safe)."""
+    if not _habilitado():
+        return
+    try:
+        from agente_2w.db import mensagem_repo
+        from agente_2w.config import OPENAI_API_KEY, OPENAI_MODEL_MINI
+        from openai import OpenAI
+
+        mensagens = mensagem_repo.listar_mensagens_por_sessao(sessao_id, limite=40)
+        if not mensagens:
+            return
+
+        # Montar transcrição compacta (cliente / agente apenas)
+        linhas: list[str] = []
+        for m in mensagens:
+            papel = "Cliente" if m.remetente.value == "cliente" else "Agente"
+            texto = (m.conteudo_texto or "").strip()
+            if texto:
+                linhas.append(f"{papel}: {texto[:200]}")
+        if not linhas:
+            return
+        transcricao = "\n".join(linhas[-30:])  # últimas 30 linhas no máximo
+
+        prompt_sistema = (
+            "Você é um assistente que resume conversas de vendas de pneus para motoboy. "
+            "Gere um resumo CURTO (máximo 3 linhas) do papo abaixo, destacando: "
+            "o que o cliente queria, dúvidas, e o pneu escolhido. "
+            "Escreva em português, sem bullet points, texto corrido."
+        )
+
+        client = OpenAI(api_key=OPENAI_API_KEY, timeout=15)
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL_MINI,
+            messages=[
+                {"role": "system", "content": prompt_sistema},
+                {"role": "user", "content": transcricao},
+            ],
+            temperature=0.3,
+            max_tokens=150,
+        )
+        resumo = (resp.choices[0].message.content or "").strip()
+        if resumo:
+            _acumular_descricao(conv_id, f"\n\U0001f4dd Resumo da conversa:\n{resumo}")
+            logger.info("Resumo da conversa injetado na task Kanban (conv %d)", conv_id)
+    except Exception:
+        logger.warning("Falha ao gerar resumo para conv %d", conv_id, exc_info=True)
 
 def definir_prioridade(conv_id: int, prioridade: str) -> None:
     """Define a prioridade da conversa no Chatwoot (urgent, high, medium, low)."""

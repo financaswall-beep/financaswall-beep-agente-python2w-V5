@@ -1493,6 +1493,7 @@ def processar_turno(
             moto=_fato_moto_p.valor_texto if _fato_moto_p else None,
             medida=_fato_medida_p.valor_texto if _fato_medida_p else None,
         )
+        chatwoot_sync.injetar_resumo_conversa(chatwoot_conv_id, sessao_id)
 
     # --- 10b. Layer 2: detectar nova intencao de compra pos-pedido ---
     # Se a sessao esta em fechamento com pedido criado e a IA emitiu acao
@@ -1622,6 +1623,7 @@ def processar_turno(
                         moto=_fato_moto_ap.valor_texto if _fato_moto_ap else None,
                         medida=_fato_medida_ap.valor_texto if _fato_medida_ap else None,
                     )
+                    chatwoot_sync.injetar_resumo_conversa(chatwoot_conv_id, sessao_id)
                 sessao_atual = sessao_repo.buscar_sessao_por_id(sessao_id)
                 if sessao_atual and sessao_atual.cliente_id:
                     _atualizar_localidade_cliente(sessao_id, sessao_atual.cliente_id)
