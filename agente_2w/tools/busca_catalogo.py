@@ -83,6 +83,36 @@ def _normalizar_termo_moto(termo: str) -> list[str]:
     return termos_tentados
 
 
+def _filtrar_top2_marcas(resultados: list[dict]) -> tuple[list[dict], list[str]]:
+    """Filtra resultados para as 2 marcas com maior estoque.
+
+    Critério de ordenação:
+      1. Maior soma de disponivel_real (estoque)
+      2. Menor preço médio (desempate)
+      3. Ordem alfabética (determinístico)
+
+    Se há ≤2 marcas distintas, retorna tudo sem filtrar.
+    Retorna (resultados_filtrados, todas_marcas_disponiveis).
+    """
+    estoque_por_marca: dict[str, int] = {}
+    soma_preco: dict[str, float] = {}
+    contagem: dict[str, int] = {}
+    for p in resultados:
+        m = p.get("pneu_marca") or p.get("marca") or ""
+        if not m:
+            continue
+        estoque_por_marca[m] = estoque_por_marca.get(m, 0) + (p.get("disponivel_real") or 0)
+        soma_preco[m] = soma_preco.get(m, 0) + float(p.get("preco_venda") or 9999)
+        contagem[m] = contagem.get(m, 0) + 1
+    preco_medio = {m: soma_preco[m] / contagem[m] for m in soma_preco}
+    todas = list(estoque_por_marca.keys())
+    if len(todas) <= 2:
+        return resultados, todas
+    top2 = sorted(todas, key=lambda m: (-estoque_por_marca[m], preco_medio.get(m, 9999), m))[:2]
+    filtrados = [p for p in resultados if (p.get("pneu_marca") or p.get("marca") or "") in top2]
+    return filtrados, todas
+
+
 def buscar_pneus(
     largura: int | None = None,
     perfil: int | None = None,
@@ -144,6 +174,17 @@ def buscar_pneus(
         preco_encontrado=float(_preco) if _preco else None,
         sessao_id=sessao_id,
     )
+
+    # Filtrar para top 2 marcas com maior estoque (busca genérica por medida)
+    if not marca_modelo and resultados:
+        resultados, _todas_marcas = _filtrar_top2_marcas(resultados)
+        if len(_todas_marcas) > 2:
+            return {
+                "quantidade": len(resultados),
+                "pneus": resultados,
+                "marcas_disponiveis": _todas_marcas,
+                "filtro": "top2_estoque",
+            }
 
     return {
         "quantidade": len(resultados),
@@ -296,11 +337,16 @@ def buscar_pneus_por_moto(
             sem_estoque = [c for c in compatibilidades if not c.get("em_estoque", True)]
 
             if com_estoque:
+                # Filtrar top 2 marcas com maior estoque
+                _ce_filtrado, _todas_m = _filtrar_top2_marcas(com_estoque)
                 resultado = {
-                    "quantidade": len(com_estoque),
-                    "compatibilidades": com_estoque,
+                    "quantidade": len(_ce_filtrado),
+                    "compatibilidades": _ce_filtrado,
                     "termo_usado": termo,
                 }
+                if len(_todas_m) > 2:
+                    resultado["marcas_disponiveis"] = _todas_m
+                    resultado["filtro"] = "top2_estoque"
                 if sem_estoque:
                     resultado["sem_estoque"] = [
                         {"pneu_id": c.get("pneu_id"), "pneu_nome": c.get("pneu_nome", ""), "medida": c.get("medida", "")}

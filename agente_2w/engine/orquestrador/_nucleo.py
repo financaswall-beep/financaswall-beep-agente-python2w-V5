@@ -1030,7 +1030,7 @@ def processar_turno(
             _msg_lower = mensagem_texto.lower()
             _msg_norm = _ud.normalize("NFD", _msg_lower).encode("ascii", "ignore").decode()
             # Padrão 1: número (ou qualquer dígito) diretamente antes ou depois de pneus/motos/rodas
-            _m_num = _re.search(r'(\d+)\s*(?:pneus?|motos?|rodas?)', _msg_norm)
+            _m_num = _re.search(r'(?<![/\-\d])(\d+)\s*(?:pneus?|motos?|rodas?)', _msg_norm)
             if _m_num:
                 _qtd_detectada = max(_qtd_detectada, int(_m_num.group(1)))
             # Padrão 2: intenção de compra explícita + número ("quero 3", "comprar 4", "preciso de 3")
@@ -1755,6 +1755,9 @@ def processar_turno(
                 ]
                 if filtrados:
                     pneus_midia = filtrados
+        # Hard cap: max 3 pneus com mídia para não sobrecarregar o cliente
+        if len(pneus_midia) > 3:
+            pneus_midia = pneus_midia[:3]
 
         for p in pneus_midia:
             pneu_id_midia = p.get("pneu_id")
