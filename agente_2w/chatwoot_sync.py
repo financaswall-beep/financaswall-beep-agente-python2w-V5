@@ -159,23 +159,42 @@ def _buscar_task_por_conversa(conv_id: int) -> int | None:
         resp.raise_for_status()
         tasks = resp.json().get("tasks", [])
         for task in tasks:
-            for conv in task.get("conversations", []):
-                if conv.get("id") == conv_id:
-                    return task["id"]
+            if conv_id in task.get("conversation_ids", []):
+                return task["id"]
     except Exception:
         logger.warning("Falha ao buscar task Kanban para conv %d", conv_id, exc_info=True)
     return None
 
 
+def _criar_task_kanban(conv_id: int, board_step_id: int) -> int | None:
+    """Cria uma nova task no Kanban vinculada à conversa."""
+    try:
+        payload = {
+            "board_id": CHATWOOT_KANBAN_BOARD_ID,
+            "board_step_id": board_step_id,
+            "title": f"Conversa #{conv_id}",
+            "conversation_ids": [conv_id],
+        }
+        url = f"{_base()}/kanban/tasks"
+        resp = _client().post(url, json=payload, headers=_headers())
+        resp.raise_for_status()
+        task_id = resp.json()["id"]
+        logger.info("Kanban: task %d criada para conv %d (step %d)", task_id, conv_id, board_step_id)
+        return task_id
+    except Exception:
+        logger.warning("Falha ao criar task Kanban para conv %d", conv_id, exc_info=True)
+    return None
+
+
 def mover_kanban(conv_id: int, board_step_id: int) -> None:
-    """Move a task do Kanban para a coluna especificada (fail-safe)."""
+    """Move a task do Kanban para a coluna especificada; cria se não existir (fail-safe)."""
     if not _habilitado() or not CHATWOOT_KANBAN_BOARD_ID or not conv_id:
         return
     try:
         task_id = _buscar_task_por_conversa(conv_id)
         if not task_id:
-            logger.debug("Kanban: nenhuma task encontrada para conv %d", conv_id)
-            return
+            task_id = _criar_task_kanban(conv_id, board_step_id)
+            return  # já criou na coluna certa, não precisa mover
         url = f"{_base()}/kanban/tasks/{task_id}"
         resp = _client().patch(url, json={"board_step_id": board_step_id}, headers=_headers())
         resp.raise_for_status()
