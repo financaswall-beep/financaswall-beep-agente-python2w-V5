@@ -154,8 +154,8 @@ def _montar_mensagem_fallback(pneus: list[dict]) -> str:
     """Monta mensagem de apresentação dos pneus encontrados pelo C9 fallback."""
     if len(pneus) == 1:
         p = pneus[0]
-        marca = p.get("marca", "")
-        modelo = p.get("modelo", "")
+        marca = p.get("pneu_marca") or p.get("marca", "")
+        modelo = p.get("pneu_modelo") or p.get("modelo", "")
         preco = p.get("preco_venda")
         nome = f"{marca} {modelo}".strip()
         if preco:
@@ -164,8 +164,8 @@ def _montar_mensagem_fallback(pneus: list[dict]) -> str:
 
     linhas = ["Temos essas opções:"]
     for p in pneus:
-        marca = p.get("marca", "")
-        modelo = p.get("modelo", "")
+        marca = p.get("pneu_marca") or p.get("marca", "")
+        modelo = p.get("pneu_modelo") or p.get("modelo", "")
         preco = p.get("preco_venda")
         nome = f"{marca} {modelo}".strip()
         if preco:

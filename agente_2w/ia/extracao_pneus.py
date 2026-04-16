@@ -27,7 +27,7 @@ def extrair_pneus_de_resultado(resultado_json: str) -> list[dict]:
     pneus: list[dict] = []
     vistos: set = set()
 
-    def _adicionar(pid: str, posicao=None, preco=None, foto_url=None) -> None:
+    def _adicionar(pid: str, posicao=None, preco=None, foto_url=None, medida=None) -> None:
         if pid and pid not in vistos:
             vistos.add(pid)
             pneus.append({
@@ -35,16 +35,18 @@ def extrair_pneus_de_resultado(resultado_json: str) -> list[dict]:
                 "posicao": posicao,
                 "preco_venda": preco,
                 "foto_url": foto_url,
+                "medida": medida,
             })
 
     def _extrair_item(item: dict, preco_contexto=None) -> None:
-        pid = item.get("pneu_id")
+        pid = item.get("pneu_id") or item.get("id")
         if pid:
             _adicionar(
                 str(pid),
-                posicao=item.get("posicao") or item.get("pneu_tipo"),
+                posicao=item.get("posicao"),
                 preco=item.get("preco_venda") or preco_contexto,
                 foto_url=item.get("foto_url"),
+                medida=item.get("medida"),
             )
 
     if isinstance(data, list):
@@ -88,6 +90,7 @@ def extrair_pneus_de_resultado(resultado_json: str) -> list[dict]:
                     posicao=pneu_sub.get("tipo") or data.get("posicao"),
                     preco=preco_root or preco_estoque,
                     foto_url=foto,
+                    medida=pneu_sub.get("medida") or data.get("medida"),
                 )
 
     return pneus

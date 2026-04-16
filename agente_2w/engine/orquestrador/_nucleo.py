@@ -874,7 +874,7 @@ _REGEX_PEDIU_FOTO = _re.compile(
     # Verbo + foto/imagem
     r"manda.{0,10}foto|manda.{0,6}imagem|"
     # Pedido de ver
-    r"ver o pneu|ver ele|me mostra|mostra.{0,6}pneu|deixa eu ver|quero ver|posso ver|tem como ver|"
+    r"ver o pneu|ver ele|me mostra|mostra\b|deixa eu ver|quero ver|posso ver|tem como ver|"
     # Diretos curtos
     r"manda\s+a[ií]\b|manda\s+ele\b|manda\s+as?\b|"
     # Cobrança / paradeiro
@@ -1018,36 +1018,57 @@ def processar_turno(
     #   D) contagem de item_provisorio ativos com pneu_id
     try:
         import re as _re
+        import unicodedata as _ud
         _esc_2d = escalacao_repo.buscar_escalacao_ativa(sessao_id)
         if not _esc_2d:
             _qtd_detectada = 0
 
             # Fonte A: scan da mensagem atual
+            # Normaliza acentos: "três" → "tres", "è" → "e", etc.
             _PALAVRAS_NUM = {"dois": 2, "tres": 3, "quatro": 4, "cinco": 5,
                              "seis": 6, "sete": 7, "oito": 8, "nove": 9, "dez": 10}
             _msg_lower = mensagem_texto.lower()
-            _m_num = _re.search(r'(\d+)\s*(?:pneus?|motos?|rodas?)', _msg_lower)
+            _msg_norm = _ud.normalize("NFD", _msg_lower).encode("ascii", "ignore").decode()
+            # Padrão 1: número (ou qualquer dígito) diretamente antes ou depois de pneus/motos/rodas
+            _m_num = _re.search(r'(\d+)\s*(?:pneus?|motos?|rodas?)', _msg_norm)
             if _m_num:
                 _qtd_detectada = max(_qtd_detectada, int(_m_num.group(1)))
+            # Padrão 2: intenção de compra explícita + número ("quero 3", "comprar 4", "preciso de 3")
+            _m_ctx = _re.search(
+                r'(?:quero|comprar|precis[ao]|pedir|colocar)\s+(?:de\s+)?(\d+)\b',
+                _msg_norm,
+            )
+            if _m_ctx:
+                _qtd_detectada = max(_qtd_detectada, int(_m_ctx.group(1)))
+            # Padrão 3: palavras por extenso (normalizadas) + pneus/motos/rodas
             for _palavra, _val in _PALAVRAS_NUM.items():
-                if _re.search(rf'\b{_palavra}\b\s*(?:pneus?|motos?|rodas?)', _msg_lower):
+                if _re.search(rf'\b{_palavra}\b\s*(?:pneus?|motos?|rodas?)', _msg_norm):
                     _qtd_detectada = max(_qtd_detectada, _val)
 
             # Fonte B: fato quantidade_solicitada
             _fato_qtd = contexto_repo.buscar_fato_ativo(sessao_id, "quantidade_solicitada")
-            if _fato_qtd and _fato_qtd.valor_texto:
-                _m = _re.search(r'\d+', _fato_qtd.valor_texto)
+            if _fato_qtd and _fato_qtd.valor:
+                _qtd_str = _ud.normalize("NFD", str(_fato_qtd.valor).lower()).encode("ascii", "ignore").decode()
+                # tenta número direto primeiro
+                _m = _re.search(r'\d+', _qtd_str)
                 if _m:
                     try:
                         _qtd_detectada = max(_qtd_detectada, int(_m.group()))
                     except (ValueError, TypeError):
                         pass
+                else:
+                    # tenta palavra por extenso
+                    for _pal, _v in _PALAVRAS_NUM.items():
+                        if _re.search(rf'\b{_pal}\b', _qtd_str):
+                            _qtd_detectada = max(_qtd_detectada, _v)
+                            break
 
             # Fonte C: contagem de motos nos fatos 'motos_informadas'
             _fato_motos = contexto_repo.buscar_fato_ativo(sessao_id, "motos_informadas")
-            if _fato_motos and _fato_motos.valor_texto:
-                # "CG, Twister, Fazer e NMAX" → 4 entradas
-                _n_motos = len(_re.split(r'[,e]', _fato_motos.valor_texto))
+            if _fato_motos and _fato_motos.valor:
+                # "CG, Twister, Fazer e NMAX" → split por vírgula ou " e "
+                _motos_str = str(_fato_motos.valor)
+                _n_motos = len(_re.split(r',|\be\b', _motos_str, flags=_re.IGNORECASE))
                 _qtd_detectada = max(_qtd_detectada, _n_motos)
 
             # Fonte D: itens ativos com pneu_id
@@ -1683,9 +1704,34 @@ def processar_turno(
     pediu_foto = _cliente_pediu_foto(mensagem_texto, etapa=contexto.sessao.etapa_atual)
     pediu_video = _cliente_pediu_video(mensagem_texto, etapa=contexto.sessao.etapa_atual)
 
+    if (pediu_foto or pediu_video) and not pneus_encontrados:
+        # Fallback: tentar recuperar do contexto se este turno nao fez busca
+        fato_pneus_foto = contexto_repo.buscar_fato_ativo(
+            sessao_id, ChaveContexto.ULTIMOS_PNEUS_ENCONTRADOS
+        )
+        if fato_pneus_foto and fato_pneus_foto.valor_json:
+            pneus_encontrados = fato_pneus_foto.valor_json
+            logger.debug("Recuperou %d pneus do contexto para envio de midia", len(pneus_encontrados))
+
     if (pediu_foto or pediu_video) and pneus_encontrados:
-        from agente_2w.db.foto_pneu_repo import buscar_foto_frontal, buscar_video
-        for p in pneus_encontrados:
+        from agente_2w.db.foto_pneu_repo import buscar_foto_frontal, buscar_video, listar_fotos
+        from agente_2w.tools.busca_catalogo import _parsear_medida
+
+        # Se muitos pneus, filtrar pela medida da mensagem do cliente
+        pneus_midia = pneus_encontrados
+        if len(pneus_midia) > 3:
+            dim = _parsear_medida(mensagem_texto)
+            if dim:
+                medida_str = f"{dim['largura']}/{dim['perfil']}-{dim['aro']}"
+                filtrados = [
+                    p for p in pneus_midia
+                    if p.get("medida") == medida_str
+                    or p.get("medida") == f"{dim['largura']}/{dim['perfil']}-{dim['aro']}"
+                ]
+                if filtrados:
+                    pneus_midia = filtrados
+
+        for p in pneus_midia:
             pneu_id_midia = p.get("pneu_id")
             if not pneu_id_midia:
                 continue
@@ -1698,11 +1744,22 @@ def processar_turno(
                     frontal = buscar_foto_frontal(pneu_uuid_midia)
                     if frontal and frontal != p.get("foto_url"):
                         fotos_para_enviar.append(frontal)
+                    # Fallback: se nenhuma foto via campos, buscar do banco
+                    if not p.get("foto_url") and not frontal:
+                        todas = listar_fotos(pneu_uuid_midia)
+                        for f in todas:
+                            url = f.get("url") if isinstance(f, dict) else getattr(f, "url", None)
+                            if url and url not in fotos_para_enviar and not url.endswith(".mp4"):
+                                fotos_para_enviar.append(url)
                 if pediu_video:
                     video_url = buscar_video(pneu_uuid_midia)
                     if video_url:
                         videos_para_enviar.append(video_url)
             except Exception:
                 logger.exception("Erro ao buscar midia do pneu %s", pneu_id_midia)
+
+    # Dedup preservando ordem
+    fotos_para_enviar = list(dict.fromkeys(fotos_para_enviar))
+    videos_para_enviar = list(dict.fromkeys(videos_para_enviar))
 
     return RespostaTurno(texto=mensagem_final, fotos=fotos_para_enviar, videos=videos_para_enviar)
