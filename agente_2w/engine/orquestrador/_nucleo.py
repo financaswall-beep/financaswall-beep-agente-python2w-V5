@@ -1205,6 +1205,8 @@ def processar_turno(
             _fato_nome = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.NOME_CLIENTE)
             if _fato_nome and _fato_nome.valor_texto:
                 chatwoot_sync.sincronizar_nome_cliente(chatwoot_contact_id, _fato_nome.valor_texto)
+                if chatwoot_conv_id:
+                    chatwoot_sync.atualizar_task_nome_cliente(chatwoot_conv_id, _fato_nome.valor_texto)
 
     # --- 7c. Cancelamento solicitado via fato ---
     fato_cancel = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.PEDIDO_CANCELAMENTO_SOLICITADO)

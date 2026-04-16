@@ -256,6 +256,7 @@ async def _recovery_cliente_perdido() -> int:
             await _enviar_mensagem_chatwoot(conv_id, mensagem)
             await asyncio.to_thread(chatwoot_sync.adicionar_label, conv_id, "cliente_perdido")
             await asyncio.to_thread(chatwoot_sync.mover_kanban, conv_id, 25)
+            await asyncio.to_thread(chatwoot_sync._atualizar_task_kanban, conv_id, {"description": f"Abandonou na etapa {etapa}"})
             logger.info(
                 "Recovery enviado: conv=%s sessao=%s etapa=%s inativo=%.0fmin",
                 conv_id, s["id"], etapa, inativo_min,

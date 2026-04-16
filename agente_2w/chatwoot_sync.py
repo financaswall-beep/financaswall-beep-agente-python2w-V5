@@ -51,6 +51,16 @@ _KANBAN_STEP_POR_ETAPA: dict[str, int] = {
 _KANBAN_STEP_PEDIDO_CRIADO = 26  # Oportunidade Ganha
 _KANBAN_STEP_CANCELADO = 25      # Oportunidade Perdida
 
+# Descricao legivel para cada etapa (preenche description da task Kanban)
+_DESCRICAO_ETAPA: dict[str, str] = {
+    "identificacao": "Identificação",
+    "busca": "Qualificando",
+    "oferta": "Proposta Enviada",
+    "confirmacao_item": "Negociação",
+    "entrega_pagamento": "Negociação — dados de entrega",
+    "fechamento": "Fechamento",
+}
+
 # Cliente HTTP reutilizavel (singleton lazy)
 _http: httpx.Client | None = None
 
@@ -204,13 +214,31 @@ def _buscar_task_por_conversa(conv_id: int) -> int | None:
     return None
 
 
+def _atualizar_task_kanban(conv_id: int, dados: dict) -> None:
+    """Atualiza campos da task Kanban vinculada à conversa (fail-safe)."""
+    if not CHATWOOT_KANBAN_BOARD_ID or not conv_id:
+        return
+    try:
+        task_id = _buscar_task_por_conversa(conv_id)
+        if not task_id:
+            return
+        _client().patch(
+            f"{_base()}/kanban/tasks/{task_id}",
+            json=dados,
+            headers=_headers(),
+        ).raise_for_status()
+        logger.debug("Kanban task %d atualizada: %s", task_id, list(dados.keys()))
+    except Exception:
+        logger.warning("Falha ao atualizar task Kanban para conv %d", conv_id, exc_info=True)
+
+
 def _criar_task_kanban(conv_id: int, board_step_id: int) -> int | None:
     """Cria uma nova task no Kanban vinculada à conversa."""
     try:
         payload = {
             "board_id": CHATWOOT_KANBAN_BOARD_ID,
             "board_step_id": board_step_id,
-            "title": f"Conversa #{conv_id}",
+            "title": f"Lead — conv #{conv_id}",
             "conversation_ids": [conv_id],
         }
         resp = _client().post(f"{_base()}/kanban/tasks", json=payload, headers=_headers())
@@ -250,6 +278,9 @@ def sincronizar_etapa(conv_id: int, etapa: str) -> None:
     step_id = _KANBAN_STEP_POR_ETAPA.get(etapa)
     if step_id:
         mover_kanban(conv_id, step_id)
+    descricao = _DESCRICAO_ETAPA.get(etapa)
+    if descricao and _habilitado():
+        _atualizar_task_kanban(conv_id, {"description": descricao})
 
 
 def sincronizar_nome_cliente(contact_id: int, nome: str) -> None:
@@ -257,6 +288,13 @@ def sincronizar_nome_cliente(contact_id: int, nome: str) -> None:
     if not nome:
         return
     atualizar_contato(contact_id, {"name": nome})
+
+
+def atualizar_task_nome_cliente(conv_id: int, nome: str) -> None:
+    """Atualiza o titulo da task Kanban com o nome do cliente (fail-safe)."""
+    if not _habilitado() or not nome or not conv_id:
+        return
+    _atualizar_task_kanban(conv_id, {"title": nome})
 
 
 def sincronizar_custom_attributes(contact_id: int, cliente: Cliente) -> None:
@@ -303,6 +341,19 @@ def sincronizar_pedido_criado(
     mover_kanban(conv_id, _KANBAN_STEP_PEDIDO_CRIADO)
     valor_fmt = f"R$ {float(valor_total):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     nota_privada(conv_id, f"Pedido #{numero_pedido} criado — {valor_fmt}")
+    # Preencher task Kanban com titulo, descricao e valor da oportunidade
+    _desc_partes = [f"Pedido #{numero_pedido}", valor_fmt]
+    if forma_pagamento:
+        _desc_partes.append(forma_pagamento)
+    if tipo_entrega:
+        _desc_partes.append(tipo_entrega)
+    if municipio:
+        _desc_partes.append(municipio)
+    _atualizar_task_kanban(conv_id, {
+        "title": f"Pedido #{numero_pedido}",
+        "description": " | ".join(_desc_partes),
+        "deal_value": float(valor_total),
+    })
 
     # Custom attributes na conversa (barra lateral)
     attrs: dict = {
@@ -324,6 +375,7 @@ def sincronizar_cancelamento(conv_id: int, numero_pedido: int | str | None = Non
     mover_kanban(conv_id, _KANBAN_STEP_CANCELADO)
     texto = f"Pedido #{numero_pedido} cancelado pelo cliente" if numero_pedido else "Pedido cancelado pelo cliente"
     nota_privada(conv_id, texto)
+    _atualizar_task_kanban(conv_id, {"description": texto})
 
 
 def definir_prioridade(conv_id: int, prioridade: str) -> None:
