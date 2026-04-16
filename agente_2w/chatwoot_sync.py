@@ -172,8 +172,8 @@ def _buscar_contact_id_da_conversa(conv_id: int) -> int | None:
     return None
 
 
-def _buscar_task_por_conversa(conv_id: int) -> int | None:
-    """Busca o task_id no Kanban pela conversa ou pelo contato da conversa."""
+def _buscar_task_dict(conv_id: int) -> dict | None:
+    """Busca a task completa (dict) no Kanban pela conversa ou contato."""
     if not CHATWOOT_KANBAN_BOARD_ID:
         return None
     try:
@@ -185,7 +185,7 @@ def _buscar_task_por_conversa(conv_id: int) -> int | None:
         # 1) busca direta por conversation_ids
         for task in tasks:
             if conv_id in task.get("conversation_ids", []):
-                return task["id"]
+                return task
 
         # 2) fallback: busca pelo contact_id da conversa
         #    pega a task mais recente (maior id) do contato
@@ -208,10 +208,16 @@ def _buscar_task_por_conversa(conv_id: int) -> int | None:
                     )
                 except Exception:
                     pass
-                return melhor["id"]
+                return melhor
     except Exception:
         logger.warning("Falha ao buscar task Kanban para conv %d", conv_id, exc_info=True)
     return None
+
+
+def _buscar_task_por_conversa(conv_id: int) -> int | None:
+    """Retorna o task_id no Kanban (atalho sobre _buscar_task_dict)."""
+    task = _buscar_task_dict(conv_id)
+    return task["id"] if task else None
 
 
 def _atualizar_task_kanban(conv_id: int, dados: dict) -> None:
@@ -268,6 +274,49 @@ def mover_kanban(conv_id: int, board_step_id: int) -> None:
         logger.warning("Falha ao mover Kanban para conv %d", conv_id, exc_info=True)
 
 
+def _montar_linha_etapa(
+    etapa_legivel: str,
+    nome_cliente: str | None = None,
+    moto: str | None = None,
+    medida: str | None = None,
+) -> str:
+    """Monta uma linha legível para uma etapa (ex: '▸ Proposta Enviada | João | CG 160 | 90/90-18')."""
+    partes: list[str] = [f"▸ {etapa_legivel}"]
+    if nome_cliente:
+        partes.append(nome_cliente)
+    if moto:
+        partes.append(moto)
+    if medida:
+        partes.append(medida)
+    return " | ".join(partes)
+
+
+def _acumular_descricao(conv_id: int, nova_linha: str) -> None:
+    """Acumula nova_linha na description da task Kanban sem apagar as anteriores.
+
+    Se a linha com o mesmo prefixo (ex: '▸ Qualificando') já existir, não duplica.
+    """
+    if not _habilitado():
+        return
+    task = _buscar_task_dict(conv_id)
+    if not task:
+        return
+    desc_atual = (task.get("description") or "").strip()
+    # Evitar duplicar — se a linha já está presente, não adicionar de novo
+    if nova_linha in desc_atual:
+        return
+    nova_desc = f"{desc_atual}\n{nova_linha}".strip() if desc_atual else nova_linha
+    try:
+        _client().patch(
+            f"{_base()}/kanban/tasks/{task['id']}",
+            json={"description": nova_desc},
+            headers=_headers(),
+        ).raise_for_status()
+        logger.debug("Kanban task %d description acumulada", task["id"])
+    except Exception:
+        logger.warning("Falha ao acumular description na task Kanban conv %d", conv_id, exc_info=True)
+
+
 def sincronizar_etapa(
     conv_id: int,
     etapa: str,
@@ -285,15 +334,8 @@ def sincronizar_etapa(
     if step_id:
         mover_kanban(conv_id, step_id)
     etapa_legivel = _DESCRICAO_ETAPA.get(etapa, etapa)
-    partes: list[str] = [etapa_legivel]
-    if nome_cliente:
-        partes.append(nome_cliente)
-    if moto:
-        partes.append(moto)
-    if medida:
-        partes.append(medida)
-    if _habilitado():
-        _atualizar_task_kanban(conv_id, {"description": " | ".join(partes)})
+    linha = _montar_linha_etapa(etapa_legivel, nome_cliente, moto, medida)
+    _acumular_descricao(conv_id, linha)
 
 
 def sincronizar_nome_cliente(contact_id: int, nome: str) -> None:
@@ -361,22 +403,25 @@ def sincronizar_pedido_criado(
     _titulo = f"Pedido #{numero_pedido}"
     if nome_cliente:
         _titulo += f" — {nome_cliente}"
-    _desc_partes: list[str] = [f"Pedido #{numero_pedido} — {valor_fmt}"]
+    # Montar bloco final de resumo do pedido
+    _resumo_partes: list[str] = []
     if nome_cliente:
-        _desc_partes.append(nome_cliente)
+        _resumo_partes.append(f"Cliente: {nome_cliente}")
     if moto:
-        _desc_partes.append(moto)
+        _resumo_partes.append(f"Moto: {moto}")
     if medida:
-        _desc_partes.append(medida)
+        _resumo_partes.append(f"Medida: {medida}")
+    _resumo_partes.append(f"Valor: {valor_fmt}")
     if forma_pagamento:
-        _desc_partes.append(forma_pagamento)
+        _resumo_partes.append(f"Pagamento: {forma_pagamento}")
     if tipo_entrega:
-        _desc_partes.append(tipo_entrega)
+        _resumo_partes.append(f"Entrega: {tipo_entrega}")
     if municipio:
-        _desc_partes.append(municipio)
+        _resumo_partes.append(f"Cidade: {municipio}")
+    _bloco_pedido = f"\n✅ PEDIDO #{numero_pedido} CONFIRMADO\n" + "\n".join(_resumo_partes)
+    _acumular_descricao(conv_id, _bloco_pedido)
     _atualizar_task_kanban(conv_id, {
         "title": _titulo,
-        "description": " | ".join(_desc_partes),
         "deal_value": float(valor_total),
     })
 
@@ -406,14 +451,10 @@ def sincronizar_cancelamento(
     mover_kanban(conv_id, _KANBAN_STEP_CANCELADO)
     texto_base = f"Pedido #{numero_pedido} cancelado pelo cliente" if numero_pedido else "Cancelado pelo cliente"
     nota_privada(conv_id, texto_base)
-    _partes_cancel: list[str] = [texto_base]
+    _bloco = f"\n❌ {texto_base}"
     if nome_cliente:
-        _partes_cancel.append(nome_cliente)
-    if moto:
-        _partes_cancel.append(moto)
-    if medida:
-        _partes_cancel.append(medida)
-    _atualizar_task_kanban(conv_id, {"description": " | ".join(_partes_cancel)})
+        _bloco += f" | {nome_cliente}"
+    _acumular_descricao(conv_id, _bloco)
 
 
 def definir_prioridade(conv_id: int, prioridade: str) -> None:
