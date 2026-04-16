@@ -178,22 +178,27 @@ def _buscar_task_por_conversa(conv_id: int) -> int | None:
                 return task["id"]
 
         # 2) fallback: busca pelo contact_id da conversa
+        #    pega a task mais recente (maior id) do contato
         contact_id = _buscar_contact_id_da_conversa(conv_id)
         if contact_id:
-            for task in tasks:
-                if contact_id in task.get("contact_ids", []):
-                    # vincula a conversa à task para próximas buscas
-                    try:
-                        existing = list(task.get("conversation_ids", []))
-                        existing.append(conv_id)
-                        _client().patch(
-                            f"{_base()}/kanban/tasks/{task['id']}",
-                            json={"conversation_ids": existing},
-                            headers=_headers(),
-                        )
-                    except Exception:
-                        pass
-                    return task["id"]
+            candidatas = [
+                t for t in tasks
+                if contact_id in t.get("contact_ids", [])
+            ]
+            if candidatas:
+                melhor = max(candidatas, key=lambda t: t["id"])
+                # vincula a conversa à task para próximas buscas
+                try:
+                    existing = list(melhor.get("conversation_ids", []))
+                    existing.append(conv_id)
+                    _client().patch(
+                        f"{_base()}/kanban/tasks/{melhor['id']}",
+                        json={"conversation_ids": existing},
+                        headers=_headers(),
+                    )
+                except Exception:
+                    pass
+                return melhor["id"]
     except Exception:
         logger.warning("Falha ao buscar task Kanban para conv %d", conv_id, exc_info=True)
     return None
