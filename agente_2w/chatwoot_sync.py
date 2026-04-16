@@ -149,8 +149,21 @@ def ativar_typing(conv_id: int) -> None:
         pass  # silencioso — UX only, nao pode travar o fluxo
 
 
+def _buscar_contact_id_da_conversa(conv_id: int) -> int | None:
+    """Retorna o contact_id do Chatwoot para uma conversa."""
+    try:
+        resp = _client().get(f"{_base()}/conversations/{conv_id}", headers=_headers())
+        resp.raise_for_status()
+        meta = resp.json().get("meta", {})
+        sender = meta.get("sender", {})
+        return sender.get("id")
+    except Exception:
+        logger.warning("Falha ao buscar contact_id para conv %d", conv_id, exc_info=True)
+    return None
+
+
 def _buscar_task_por_conversa(conv_id: int) -> int | None:
-    """Busca o task_id no Kanban pela conversa interna do Chatwoot."""
+    """Busca o task_id no Kanban pela conversa ou pelo contato da conversa."""
     if not CHATWOOT_KANBAN_BOARD_ID:
         return None
     try:
@@ -158,9 +171,29 @@ def _buscar_task_por_conversa(conv_id: int) -> int | None:
         resp = _client().get(url, headers=_headers())
         resp.raise_for_status()
         tasks = resp.json().get("tasks", [])
+
+        # 1) busca direta por conversation_ids
         for task in tasks:
             if conv_id in task.get("conversation_ids", []):
                 return task["id"]
+
+        # 2) fallback: busca pelo contact_id da conversa
+        contact_id = _buscar_contact_id_da_conversa(conv_id)
+        if contact_id:
+            for task in tasks:
+                if contact_id in task.get("contact_ids", []):
+                    # vincula a conversa à task para próximas buscas
+                    try:
+                        existing = list(task.get("conversation_ids", []))
+                        existing.append(conv_id)
+                        _client().patch(
+                            f"{_base()}/kanban/tasks/{task['id']}",
+                            json={"conversation_ids": existing},
+                            headers=_headers(),
+                        )
+                    except Exception:
+                        pass
+                    return task["id"]
     except Exception:
         logger.warning("Falha ao buscar task Kanban para conv %d", conv_id, exc_info=True)
     return None
@@ -175,8 +208,7 @@ def _criar_task_kanban(conv_id: int, board_step_id: int) -> int | None:
             "title": f"Conversa #{conv_id}",
             "conversation_ids": [conv_id],
         }
-        url = f"{_base()}/kanban/tasks"
-        resp = _client().post(url, json=payload, headers=_headers())
+        resp = _client().post(f"{_base()}/kanban/tasks", json=payload, headers=_headers())
         resp.raise_for_status()
         task_id = resp.json()["id"]
         logger.info("Kanban: task %d criada para conv %d (step %d)", task_id, conv_id, board_step_id)
@@ -194,7 +226,7 @@ def mover_kanban(conv_id: int, board_step_id: int) -> None:
         task_id = _buscar_task_por_conversa(conv_id)
         if not task_id:
             task_id = _criar_task_kanban(conv_id, board_step_id)
-            return  # já criou na coluna certa, não precisa mover
+            return  # já criou na coluna certa
         url = f"{_base()}/kanban/tasks/{task_id}"
         resp = _client().patch(url, json={"board_step_id": board_step_id}, headers=_headers())
         resp.raise_for_status()
