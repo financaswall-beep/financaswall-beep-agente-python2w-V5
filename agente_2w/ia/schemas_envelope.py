@@ -10,6 +10,35 @@ Schema dinâmico (build_envelope_schema):
   atual — elimina retries desnecessários com flagship.
 """
 
+# Chaves válidas para fatos_observados, fatos_inferidos e mudancas_contexto.
+# Com strict: true, o modelo é forçado a escolher uma dessas — impede invenção
+# de chaves novas (ex: "intencao_compra", "saudacao_cliente").
+# Inclui todas as chaves de ChaveContexto + escape hatches para observações
+# que não mapeiam para nenhuma chave funcional do backend.
+_CHAVES_CONTEXTO_ENUM = [
+    # --- Moto / busca (backend lê) ---
+    "moto_marca", "moto_modelo", "moto_ano", "medida_informada", "posicao_pneu",
+    # --- Cliente (backend lê) ---
+    "nome_cliente", "telefone_cliente",
+    # --- Entrega / pagamento (backend lê) ---
+    "tipo_entrega", "forma_pagamento", "endereco_entrega",
+    # --- Localidade / frete (backend lê) ---
+    "municipio", "bairro", "frete_valor", "frete_nao_coberto",
+    "municipio_ambiguo", "localidade_nao_resolvida", "municipio_entrega",
+    # --- Flags de fluxo (backend lê) ---
+    "ultimos_pneus_encontrados", "sem_preferencia_marca",
+    "cliente_recusou_opcao_atual", "itens_finalizados",
+    "pedido_cancelamento_solicitado", "erro_promocao", "estoque_esgotado",
+    # --- Escalacao (backend lê) ---
+    "escalar_para_humano", "cliente_atacado", "emergencia_pneu",
+    # --- Escape hatches (backend ignora, IA usa como memória cross-turn) ---
+    "intencao_cliente",
+    "observacao_geral",
+    "duvida_estado_pneu",
+    "pedido_foto",
+    "marca_pneu_preferida",
+]
+
 # Transições válidas por etapa (espelho de maquina_estados.py — mantido aqui
 # para não importar engine em ia/, evitando dependência circular)
 _TRANSICOES: dict[str, list[str]] = {
@@ -75,7 +104,7 @@ def _build_schema_base() -> dict:
                 "items": {
                     "type": "object",
                     "properties": {
-                        "chave":            {"type": "string"},
+                        "chave":            {"type": "string", "enum": _CHAVES_CONTEXTO_ENUM},
                         "valor":            {"type": "string"},
                         "mensagem_chat_id": {"type": ["string", "null"]},
                     },
@@ -88,7 +117,7 @@ def _build_schema_base() -> dict:
                 "items": {
                     "type": "object",
                     "properties": {
-                        "chave":         {"type": "string"},
+                        "chave":         {"type": "string", "enum": _CHAVES_CONTEXTO_ENUM},
                         "valor":         {"type": "string"},
                         "justificativa": {"type": "string"},
                     },
@@ -101,7 +130,7 @@ def _build_schema_base() -> dict:
                 "items": {
                     "type": "object",
                     "properties": {
-                        "chave":      {"type": "string"},
+                        "chave":      {"type": "string", "enum": _CHAVES_CONTEXTO_ENUM},
                         "valor_novo": {"type": "string"},
                         "motivo":     {"type": "string"},
                     },

@@ -166,7 +166,8 @@ print(f"  sessao teste: {sessao.id}")
 ctx = montar_contexto(sessao.id)
 
 def test_chamada_openai():
-    resposta_bruta = chamar_agente(ctx, "Oi, preciso de um pneu pra minha CG 160")
+    resultado = chamar_agente(ctx, "Oi, preciso de um pneu pra minha CG 160")
+    resposta_bruta = resultado[0] if isinstance(resultado, tuple) else resultado
     assert len(resposta_bruta) > 10, "resposta vazia"
     return resposta_bruta
 

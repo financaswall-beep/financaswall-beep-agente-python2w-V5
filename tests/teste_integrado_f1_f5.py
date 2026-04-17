@@ -490,9 +490,10 @@ _resposta_bruta = None
 if _ctx:
     _resultado_ia = safe(F, "IA", "chamar_agente (OpenAI real)", lambda:
         chamar_agente(_ctx, "Preciso de pneu pra CG 160"))
-    # chamar_agente retorna (texto, pneus_encontrados) desde Fase 9
+    # chamar_agente retorna (texto, pneus_encontrados, usage_info) desde Fase 9
     if isinstance(_resultado_ia, tuple):
-        _resposta_bruta, _pneus_ia = _resultado_ia
+        _resposta_bruta = _resultado_ia[0]
+        _pneus_ia = _resultado_ia[1] if len(_resultado_ia) > 1 else []
     else:
         _resposta_bruta = _resultado_ia
 

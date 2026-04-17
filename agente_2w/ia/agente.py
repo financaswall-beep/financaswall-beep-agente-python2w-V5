@@ -24,6 +24,7 @@ COMPATIBILIDADE:
 
 import json
 import logging
+import time
 
 from openai import OpenAI, RateLimitError, APITimeoutError, APIConnectionError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -48,6 +49,19 @@ from agente_2w.tools.consulta_estoque import consultar_estoque
 from agente_2w.tools.resolve_cliente import resolver_cliente
 
 _client = OpenAI(api_key=OPENAI_API_KEY, timeout=OPENAI_TIMEOUT)
+
+
+def _extrair_usage(response, modelo: str, latencia_ms: int) -> dict:
+    """Extrai informacoes de uso do response da OpenAI para metadata_json."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return {"modelo": modelo, "latencia_ms": latencia_ms}
+    return {
+        "modelo": modelo,
+        "tokens_in": getattr(usage, "input_tokens", None) or getattr(usage, "prompt_tokens", None),
+        "tokens_out": getattr(usage, "output_tokens", None) or getattr(usage, "completion_tokens", None),
+        "latencia_ms": latencia_ms,
+    }
 
 from agente_2w.ia.schemas_envelope import ENVELOPE_IA_SCHEMA as _ENVELOPE_IA_SCHEMA, build_envelope_schema as _build_envelope_schema
 from agente_2w.ia.tools_schema import TOOLS_SCHEMA, TOOLS_COM_PNEU as _TOOLS_COM_PNEU
@@ -265,7 +279,7 @@ def _chamar_agente_responses(
     mensagem_usuario: str,
     imagens: list[str] | None = None,
     tentativa: int = 1,
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict], dict]:
     """Loop de tool calls via Responses API para gpt-5.x."""
     contexto_json = contexto.model_dump_json(indent=None)
 
@@ -311,6 +325,8 @@ def _chamar_agente_responses(
         "buscar_pneus": lambda **kwargs: buscar_pneus(**kwargs, sessao_id=sessao_id),
     }
 
+    t0 = time.monotonic()
+
     for round_num in range(MAX_TOOL_ROUNDS):
         response = _chamar_openai_responses(
             instructions=instructions,
@@ -324,7 +340,8 @@ def _chamar_agente_responses(
         function_calls = _extrair_function_calls(output_items)
 
         if not function_calls:
-            return response.output_text or "", pneus_encontrados
+            latencia = int((time.monotonic() - t0) * 1000)
+            return response.output_text or "", pneus_encontrados, _extrair_usage(response, modelo, latencia)
 
         # Doc: "include the original function_call item followed by
         # its function_call_output item (same call_id)"
@@ -362,7 +379,8 @@ def _chamar_agente_responses(
         model=modelo,
         envelope_schema=envelope_schema,
     )
-    return response.output_text or "", pneus_encontrados
+    latencia = int((time.monotonic() - t0) * 1000)
+    return response.output_text or "", pneus_encontrados, _extrair_usage(response, modelo, latencia)
 
 
 # ==========================================================================
@@ -374,7 +392,7 @@ def chamar_agente(
     mensagem_usuario: str,
     imagens: list[str] | None = None,
     tentativa: int = 1,
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict], dict]:
     """Envia mensagem do usuário + contexto para o modelo e processa tool calls.
 
     Roteamento automático:
@@ -384,6 +402,7 @@ def chamar_agente(
     Retorna tupla:
         - texto bruto da resposta final do modelo (JSON do EnvelopeIA)
         - lista de pneus encontrados pelas tools (pneu_id, posicao, preco_venda)
+        - dict com metadata de uso (modelo, tokens, latencia)
     """
     modelo = _escolher_modelo(tentativa, bool(imagens))
 
@@ -410,7 +429,7 @@ def _chamar_agente_completions(
     mensagem_usuario: str,
     imagens: list[str] | None = None,
     tentativa: int = 1,
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict], dict]:
     """Loop de tool calls via Chat Completions — código original sem alteração."""
     contexto_json = contexto.model_dump_json(indent=None)
 
@@ -450,12 +469,15 @@ def _chamar_agente_completions(
         "buscar_pneus": lambda **kwargs: buscar_pneus(**kwargs, sessao_id=sessao_id),
     }
 
+    t0 = time.monotonic()
+
     for round_num in range(MAX_TOOL_ROUNDS):
         response = _chamar_openai_completions(messages, tools=TOOLS_SCHEMA, model=modelo)
         choice = response.choices[0]
 
         if choice.finish_reason != "tool_calls" or not choice.message.tool_calls:
-            return choice.message.content or "", pneus_encontrados
+            latencia = int((time.monotonic() - t0) * 1000)
+            return choice.message.content or "", pneus_encontrados, _extrair_usage(response, modelo, latencia)
 
         messages.append(choice.message)
 
@@ -475,4 +497,5 @@ def _chamar_agente_completions(
 
     logger.warning("Esgotou %d rounds de tool calls, chamando sem tools", MAX_TOOL_ROUNDS)
     response = _chamar_openai_completions(messages, model=modelo)
-    return response.choices[0].message.content or "", pneus_encontrados
+    latencia = int((time.monotonic() - t0) * 1000)
+    return response.choices[0].message.content or "", pneus_encontrados, _extrair_usage(response, modelo, latencia)

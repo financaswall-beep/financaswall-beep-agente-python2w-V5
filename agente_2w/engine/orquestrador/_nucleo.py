@@ -181,12 +181,14 @@ def _resolver_timeout(sessao) -> UUID:
 def _chamar_e_validar(contexto, mensagem_texto: str, imagens: list[str] | None = None):
     """Chama IA, parseia e valida. Retry com correcao se envelope invalido.
 
-    Retorna tupla (EnvelopeIA, pneus_encontrados) ou (None, []).
+    Retorna tupla (EnvelopeIA, pneus_encontrados, usage_info) ou (None, [], {}).
     pneus_encontrados: lista de dicts com pneu_id/posicao/preco_venda extraidos das tools.
+    usage_info: dict com metadata de uso da OpenAI (modelo, tokens, latencia).
     """
     etapa = contexto.sessao.etapa_atual.value
     todos_pneus: list[dict] = []
     erros_anteriores: list[str] = []
+    ultimo_usage: dict = {}
 
     for tentativa in range(1 + MAX_RETRIES):
         # Na primeira tentativa, mensagem normal. No retry, mensagem com correcao.
@@ -208,13 +210,13 @@ def _chamar_e_validar(contexto, mensagem_texto: str, imagens: list[str] | None =
         try:
             # Imagens só na primeira tentativa — retry usa só texto de correção
             imgs = imagens if tentativa == 0 else None
-            resposta_bruta, pneus_da_chamada = chamar_agente(
+            resposta_bruta, pneus_da_chamada, ultimo_usage = chamar_agente(
                 contexto, msg, imagens=imgs, tentativa=tentativa + 1,
             )
             todos_pneus.extend(pneus_da_chamada)
         except Exception:
             logger.exception("Erro na chamada da IA (tentativa %d)", tentativa)
-            return None, []
+            return None, [], {}
 
         try:
             envelope, erros_validacao = parse_resposta(resposta_bruta, contexto)
@@ -240,7 +242,7 @@ def _chamar_e_validar(contexto, mensagem_texto: str, imagens: list[str] | None =
                     f"{len(todos_pneus)} resultado(s). Apresente os pneus encontrados ao cliente."
                 ]
                 continue
-            return envelope, todos_pneus
+            return envelope, todos_pneus, ultimo_usage
 
         logger.warning(
             "Envelope invalido (tentativa %d): %s",
@@ -249,7 +251,7 @@ def _chamar_e_validar(contexto, mensagem_texto: str, imagens: list[str] | None =
         erros_anteriores = erros_validacao
 
     logger.error("IA falhou apos %d tentativas", 1 + MAX_RETRIES)
-    return None, []
+    return None, [], {}
 
 
 def _persistir_pneus_encontrados(sessao_id: UUID, pneus: list[dict]) -> None:
@@ -540,7 +542,7 @@ def _atualizar_nome_cliente(sessao_id: UUID, cliente_id) -> None:
         logger.exception("Falha ao atualizar nome do cliente")
 
 
-def _persistir_saida(sessao_id: UUID, texto: str) -> None:
+def _persistir_saida(sessao_id: UUID, texto: str, metadata_json: dict | None = None) -> None:
     """Persiste mensagem de saida do agente."""
     try:
         mensagem_repo.criar_mensagem(MensagemChatCreate(
@@ -549,6 +551,7 @@ def _persistir_saida(sessao_id: UUID, texto: str) -> None:
             remetente=Remetente.agente,
             conteudo_texto=texto,
             criado_em=datetime.now(timezone.utc),
+            metadata_json=metadata_json,
         ))
     except Exception:
         logger.exception("Erro ao persistir mensagem de saida")
@@ -1137,7 +1140,7 @@ def processar_turno(
         return RespostaTurno(texto=MENSAGEM_FALHA_SEGURA)
 
     # --- 4 e 5. Chamar IA + parsear/validar com retry ---
-    envelope, pneus_encontrados = _chamar_e_validar(contexto, mensagem_texto, imagens=imagens)
+    envelope, pneus_encontrados, usage_info = _chamar_e_validar(contexto, mensagem_texto, imagens=imagens)
     if envelope is None:
         _persistir_saida(sessao_id, MENSAGEM_FALHA_SEGURA)
         return RespostaTurno(texto=MENSAGEM_FALHA_SEGURA)
@@ -1723,7 +1726,7 @@ def processar_turno(
                     "Informe o cliente com o resultado e continue coletando os dados que faltam "
                     "(endereco completo, forma de pagamento). Nao diga 'verificar' nem 'aguarde'."
                 )
-            envelope_pos_frete, _ = _chamar_e_validar(contexto_pos_frete, _TRIGGER_FRETE)
+            envelope_pos_frete, _, _ = _chamar_e_validar(contexto_pos_frete, _TRIGGER_FRETE)
             if envelope_pos_frete:
                 logger.info("Follow-up frete: mensagem atualizada apos calculo automatico")
                 # Processar fatos do follow-up (ex: municipio confirmado, entrega registrada)
@@ -1745,7 +1748,7 @@ def processar_turno(
         if pedido_criado
         else (envelope_pos_frete.mensagem_cliente if envelope_pos_frete else envelope.mensagem_cliente)
     )
-    _persistir_saida(sessao_id, mensagem_final)
+    _persistir_saida(sessao_id, mensagem_final, metadata_json=usage_info or None)
 
     # --- 14. Retornar mensagem + fotos + videos (apenas se cliente solicitou) ---
     fotos_para_enviar: list[str] = []
