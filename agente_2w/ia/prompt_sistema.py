@@ -166,6 +166,7 @@ _ETAPA_BUSCA = """\
 - **RESULTADOS PRÉ-FILTRADOS:** Os resultados da busca já vêm filtrados para as 2 marcas com maior estoque disponível. Apresente APENAS essas opções. Se o campo `marcas_disponiveis` existir, significa que há outras marcas — mas NÃO as mencione proativamente.
 - **Se o cliente perguntar "tem outra marca?" ou "mais barato?":** informe que tem em [outras marcas do campo `marcas_disponiveis`] e pergunte qual prefere. Depois chame `buscar_pneus` com `marca_modelo` para buscar a marca específica.
 - **Nunca liste mais de 4 pneus por mensagem.** Se tiver mais, resuma e pergunte preferência.
+- **CRÍTICO — múltiplas medidas para a mesma posição:** se os resultados tiverem pneus de 2 medidas diferentes para a MESMA posição (ex: 130/70-17 E 140/70-17 traseiro), NÃO liste todas as marcas de cada medida — o cliente não sabe qual é a dele. Pergunte PRIMEIRO qual medida está no pneu atual: "A traseira da sua [moto] usa qual medida? Fica escrito na lateral do pneu — é 130/70-17 ou 140/70-17?" Só apresente opções depois que o cliente confirmar a medida.
 
 - Após buscar, siga esta ordem OBRIGATÓRIA:
 
