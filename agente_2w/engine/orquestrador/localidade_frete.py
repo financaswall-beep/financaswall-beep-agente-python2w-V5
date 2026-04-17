@@ -190,21 +190,24 @@ def _consultar_e_registrar_frete(sessao_id: UUID) -> None:
             except Exception:
                 pass
 
-        # Idempotencia: se frete já calculado pro mesmo município, não recalcula
+        # Idempotencia: se frete já calculado pro mesmo termo de consulta, não recalcula.
+        # Compara pelo termo_consulta (ex: "Grajaú") e não pelo municipio resolvido
+        # (ex: "Rio de Janeiro"), pois o cliente informa bairro mas o frete resolve município.
         # EXCETO se resultado anterior foi frete_nao_coberto — sempre recalcular
         # para corrigir falsos negativos (ex: bug de normalização já corrigido).
         fato_frete = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.FRETE_VALOR)
         fato_nao_coberto = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.FRETE_NAO_COBERTO)
         if fato_frete or fato_nao_coberto:
-            municipio_anterior = None
+            termo_anterior = None
             if fato_nao_coberto:
-                municipio_anterior = fato_nao_coberto.valor_texto
+                termo_anterior = fato_nao_coberto.valor_texto
             elif fato_frete and fato_frete.valor_json and isinstance(fato_frete.valor_json, dict):
-                municipio_anterior = fato_frete.valor_json.get("municipio")
+                termo_anterior = fato_frete.valor_json.get("termo_consulta") or fato_frete.valor_json.get("municipio")
 
-            # Se o resultado anterior foi frete_valor (positivo) e mesmo município, skip
-            if fato_frete and not fato_nao_coberto and municipio and municipio_anterior and municipio_anterior.lower() == municipio.lower():
-                return  # mesmo município, frete já calculado corretamente
+            # Se o resultado anterior foi frete_valor (positivo) e mesmo termo, skip
+            termo_atual = municipio or bairro
+            if fato_frete and not fato_nao_coberto and termo_atual and termo_anterior and termo_anterior.lower() == termo_atual.lower():
+                return  # mesma localidade, frete já calculado corretamente
 
             # Município mudou OU resultado anterior era frete_nao_coberto — limpar e recalcular
             for chave_frete in (ChaveContexto.FRETE_VALOR, ChaveContexto.FRETE_NAO_COBERTO):
@@ -307,16 +310,27 @@ def _registrar_frete_valor(sessao_id: UUID, valor_frete, municipio: str) -> None
         contexto_repo.desativar_fato_anterior(sessao_id, ChaveContexto.FRETE_NAO_COBERTO)
     except Exception:
         pass
+    # Buscar termo original (municipio ou bairro do fato) para idempotencia
+    termo_consulta = municipio
+    try:
+        for chave_mun in (ChaveContexto.MUNICIPIO, ChaveContexto.MUNICIPIO_ENTREGA):
+            _fato_mun = contexto_repo.buscar_fato_ativo(sessao_id, chave_mun)
+            if _fato_mun and _fato_mun.valor_texto:
+                termo_consulta = _fato_mun.valor_texto
+                break
+    except Exception:
+        pass
+
     contexto_repo.registrar_fato(ContextoConversaCreate(
         sessao_chat_id=sessao_id,
         chave=ChaveContexto.FRETE_VALOR,
         valor_texto=str(valor_frete),
-        valor_json={"municipio": municipio},
+        valor_json={"municipio": municipio, "termo_consulta": termo_consulta},
         tipo_de_verdade=TipoDeVerdade.validado_tool,
         nivel_confirmacao=NivelConfirmacao.nenhum,
         fonte=OrigemContexto.backend,
     ))
-    logger.info("Frete registrado: %s = R$%s", municipio, valor_frete)
+    logger.info("Frete registrado: %s = R$%s (termo=%s)", municipio, valor_frete, termo_consulta)
 
 
 def _registrar_frete_nao_coberto(sessao_id: UUID, municipio: str) -> None:

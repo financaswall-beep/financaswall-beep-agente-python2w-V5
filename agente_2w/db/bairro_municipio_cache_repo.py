@@ -99,13 +99,11 @@ def salvar(
         res = query.limit(1).execute()
 
         if res.data:
-            # Já existe — atualiza
+            # Já existe — atualiza (sem incrementar acessos: métrica de consulta, não de escrita)
             row_id = res.data[0]["id"]
-            acessos_atual = res.data[0].get("acessos") or 0
             update_payload = {
                 "bairro": bairro,
                 "fonte": fonte,
-                "acessos": acessos_atual + 1,
                 "atualizado_em": agora,
             }
             if sessao_id:

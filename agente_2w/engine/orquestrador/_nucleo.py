@@ -1742,12 +1742,22 @@ def processar_turno(
             if envelope_pos_frete:
                 logger.info("Follow-up frete: mensagem atualizada apos calculo automatico")
                 # Processar fatos do follow-up (ex: municipio confirmado, entrega registrada)
+                # FILTRAR frete_valor e frete_nao_coberto — o backend já registrou com dados
+                # corretos (incluindo valor_json). A IA sobrescreveria sem valor_json,
+                # quebrando a idempotencia nos turnos seguintes.
+                _CHAVES_FRETE_BACKEND = {ChaveContexto.FRETE_VALOR, ChaveContexto.FRETE_NAO_COBERTO}
                 if envelope_pos_frete.fatos_observados:
-                    _aplicar_fatos_observados(sessao_id, envelope_pos_frete.fatos_observados, msg_entrada.id)
+                    fatos_obs_filtrados = [f for f in envelope_pos_frete.fatos_observados if f.chave not in _CHAVES_FRETE_BACKEND]
+                    if fatos_obs_filtrados:
+                        _aplicar_fatos_observados(sessao_id, fatos_obs_filtrados, msg_entrada.id)
                 if envelope_pos_frete.fatos_inferidos:
-                    _aplicar_fatos_inferidos(sessao_id, envelope_pos_frete.fatos_inferidos)
+                    fatos_inf_filtrados = [f for f in envelope_pos_frete.fatos_inferidos if f.chave not in _CHAVES_FRETE_BACKEND]
+                    if fatos_inf_filtrados:
+                        _aplicar_fatos_inferidos(sessao_id, fatos_inf_filtrados)
                 if envelope_pos_frete.mudancas_contexto:
-                    _aplicar_mudancas_contexto(sessao_id, envelope_pos_frete.mudancas_contexto)
+                    mudancas_filtradas = [m for m in envelope_pos_frete.mudancas_contexto if m.chave not in _CHAVES_FRETE_BACKEND]
+                    if mudancas_filtradas:
+                        _aplicar_mudancas_contexto(sessao_id, mudancas_filtradas)
         except Exception:
             logger.exception("Falha no follow-up de frete — usando mensagem original")
 
