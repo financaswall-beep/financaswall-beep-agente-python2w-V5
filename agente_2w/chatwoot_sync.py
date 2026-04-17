@@ -343,6 +343,18 @@ def sincronizar_etapa(
         if step_id:
             _criar_task_kanban(conv_id, step_id)
         return
+
+    # Steps 25 (Oportunidade Perdida) e 26 (Oportunidade Ganha) sao terminais.
+    # Se o lead ja esta num desses steps, NAO regredir para etapa anterior
+    # (ex: webhook async de etapa=fechamento sobrescrevia step 26 com 24).
+    step_atual = task.get("board_step_id")
+    if step_atual in (_KANBAN_STEP_PEDIDO_CRIADO, _KANBAN_STEP_CANCELADO):
+        logger.debug(
+            "sincronizar_etapa: conv %d ja em step terminal %s — ignorando",
+            conv_id, step_atual,
+        )
+        return
+
     desc_atual = (task.get("description") or "").strip()
     dados: dict = {}
     if linha not in desc_atual:

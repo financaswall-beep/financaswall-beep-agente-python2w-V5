@@ -437,6 +437,16 @@ def _salvar_itens_orfaos_pre_finalizacao(sessao_id: UUID) -> int:
         str(i.pneu_id) for i in itens_ativos if i.pneu_id
     }
 
+    # Se ja existe ao menos 1 item com pneu vinculado, a rede de seguranca
+    # NAO deve criar mais itens — o modelo ja salvou o que o cliente escolheu.
+    # Criar itens extras aqui causava pedidos inflados (ex: 12 pneus em vez de 1).
+    if pneu_ids_ja_salvos:
+        logger.debug(
+            "Safety net finalizacao: %d item(ns) ja salvos — skip",
+            len(pneu_ids_ja_salvos),
+        )
+        return 0
+
     # Pneus rejeitados/cancelados — nao recriar
     pneu_ids_cancelados: set[str] = set()
     for item in itens_ativos:
