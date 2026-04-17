@@ -1071,9 +1071,18 @@ def processar_turno(
                 _n_motos = len(_re.split(r',|\be\b', _motos_str, flags=_re.IGNORECASE))
                 _qtd_detectada = max(_qtd_detectada, _n_motos)
 
-            # Fonte D: itens ativos com pneu_id
+            # Fonte D: itens CONFIRMADOS pelo cliente com pneu_id
+            # Nao conta itens 'sugerido' (apenas ofertados pela IA) — evita falso positivo
+            # quando a IA apresenta 3+ opcoes de marca/medida ao cliente.
             _itens_2d = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
-            _qtd_detectada = max(_qtd_detectada, len([i for i in _itens_2d if i.pneu_id]))
+            _itens_confirmados_2d = [
+                i for i in _itens_2d
+                if i.pneu_id and i.status_item in (
+                    StatusItemProvisorio.selecionado_cliente,
+                    StatusItemProvisorio.validado,
+                )
+            ]
+            _qtd_detectada = max(_qtd_detectada, len(_itens_confirmados_2d))
 
             if _qtd_detectada >= 3:
                 _processar_escalacao(sessao_id, chatwoot_conv_id, "pedido_volume", "codigo")
@@ -1445,9 +1454,17 @@ def processar_turno(
                                 logger.exception("Rede de seguranca 9d falhou")
 
     # --- 9e. Escalacao: pedido com 3+ itens (handoff volume) ---
+    # Conta apenas itens CONFIRMADOS pelo cliente (selecionado_cliente ou validado).
+    # Itens 'sugerido' sao apenas apresentacoes da IA — nao indicam volume real.
     try:
         _itens_9e = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
-        _itens_com_pneu_9e = [i for i in _itens_9e if i.pneu_id]
+        _itens_com_pneu_9e = [
+            i for i in _itens_9e
+            if i.pneu_id and i.status_item in (
+                StatusItemProvisorio.selecionado_cliente,
+                StatusItemProvisorio.validado,
+            )
+        ]
         if len(_itens_com_pneu_9e) >= 3:
             _esc_9e = escalacao_repo.buscar_escalacao_ativa(sessao_id)
             if not _esc_9e:
