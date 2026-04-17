@@ -1219,6 +1219,18 @@ def processar_turno(
                 chatwoot_sync.sincronizar_nome_cliente(chatwoot_contact_id, _fato_nome.valor_texto)
                 if chatwoot_conv_id:
                     chatwoot_sync.atualizar_task_nome_cliente(chatwoot_conv_id, _fato_nome.valor_texto)
+            # Sincronizar telefone do cliente para contatos de Instagram/Facebook
+            _fato_tel = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.TELEFONE_CLIENTE)
+            if _fato_tel and _fato_tel.valor_texto and sessao_apos_fatos.canal in ("instagram", "facebook"):
+                chatwoot_sync.sincronizar_telefone_contato(chatwoot_contact_id, _fato_tel.valor_texto)
+                # Atualizar telefone no banco de clientes tambem
+                try:
+                    cliente_repo.atualizar_cliente(
+                        sessao_apos_fatos.cliente_id,
+                        {"telefone": _fato_tel.valor_texto},
+                    )
+                except Exception:
+                    logger.exception("Falha ao atualizar telefone do cliente")
 
     # --- 7c. Cancelamento solicitado via fato ---
     fato_cancel = contexto_repo.buscar_fato_ativo(sessao_id, ChaveContexto.PEDIDO_CANCELAMENTO_SOLICITADO)
@@ -1770,19 +1782,32 @@ def processar_turno(
         from agente_2w.db.foto_pneu_repo import buscar_foto_frontal, buscar_video, listar_fotos
         from agente_2w.tools.busca_catalogo import _parsear_medida
 
-        # Se muitos pneus, filtrar pela medida da mensagem do cliente
-        pneus_midia = pneus_encontrados
-        if len(pneus_midia) > 3:
-            dim = _parsear_medida(mensagem_texto)
-            if dim:
-                medida_str = f"{dim['largura']}/{dim['perfil']}-{dim['aro']}"
-                filtrados = [
-                    p for p in pneus_midia
-                    if p.get("medida") == medida_str
-                    or p.get("medida") == f"{dim['largura']}/{dim['perfil']}-{dim['aro']}"
-                ]
-                if filtrados:
-                    pneus_midia = filtrados
+        # Se o cliente já selecionou um pneu (item_provisorio ativo), enviar foto
+        # SOMENTE daquele pneu — nunca de outros da busca anterior.
+        _itens_sel = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
+        _pneu_ids_selecionados = {
+            str(it.pneu_id) for it in _itens_sel
+            if it.status_item == StatusItemProvisorio.selecionado_cliente
+        }
+        if _pneu_ids_selecionados:
+            pneus_midia = [
+                p for p in pneus_encontrados
+                if str(p.get("pneu_id")) in _pneu_ids_selecionados
+            ]
+        else:
+            # Sem item selecionado: usar lista completa com filtros existentes
+            pneus_midia = pneus_encontrados
+            if len(pneus_midia) > 3:
+                dim = _parsear_medida(mensagem_texto)
+                if dim:
+                    medida_str = f"{dim['largura']}/{dim['perfil']}-{dim['aro']}"
+                    filtrados = [
+                        p for p in pneus_midia
+                        if p.get("medida") == medida_str
+                        or p.get("medida") == f"{dim['largura']}/{dim['perfil']}-{dim['aro']}"
+                    ]
+                    if filtrados:
+                        pneus_midia = filtrados
         # Hard cap: max 3 pneus com mídia para não sobrecarregar o cliente
         if len(pneus_midia) > 3:
             pneus_midia = pneus_midia[:3]

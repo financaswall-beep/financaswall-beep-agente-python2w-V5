@@ -368,6 +368,18 @@ def sincronizar_nome_cliente(contact_id: int, nome: str) -> None:
     atualizar_contato(contact_id, {"name": nome})
 
 
+def sincronizar_telefone_contato(contact_id: int, telefone: str) -> None:
+    """Atualiza o phone_number do contato no Chatwoot (útil para Instagram/Facebook)."""
+    if not telefone:
+        return
+    # Garante formato +55...
+    tel = telefone.strip().lstrip("+")
+    if not tel.startswith("55"):
+        tel = "55" + tel
+    atualizar_contato(contact_id, {"phone_number": f"+{tel}"})
+    logger.info("Telefone do contato %s atualizado no Chatwoot: +%s", contact_id, tel)
+
+
 def atualizar_task_nome_cliente(conv_id: int, nome: str) -> None:
     """Atualiza o titulo da task Kanban com o nome do cliente (fail-safe)."""
     if not _habilitado() or not nome or not conv_id:

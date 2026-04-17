@@ -303,6 +303,12 @@ _ETAPA_ENTREGA_PAGAMENTO = """\
   - Com retirada: "Qual seu nome pra eu anotar?"
   - Quando o cliente informar o nome, registre em `fatos_observados`: `{"chave": "nome_cliente", "valor": "João Silva", "mensagem_chat_id": null}`
 
+- **WhatsApp do cliente (Instagram e Facebook):** Se o canal da sessão (`sessao.canal`) for `instagram` ou `facebook`, o telefone do cliente NÃO vem automaticamente. Nesse caso, peça o WhatsApp UMA VEZ durante a conversa — de forma natural, junto com o fluxo de entrega/pagamento (ex: ao pedir o nome ou o endereço). NÃO peça na primeira mensagem nem interrompa o fluxo para isso.
+  - Exemplo: "Qual seu nome e WhatsApp pra eu anotar o pedido?"
+  - Exemplo: "Me passa seu WhatsApp que facilita pra gente combinar a entrega 📲"
+  - Quando o cliente informar, registre em `fatos_observados`: `{"chave": "telefone_cliente", "valor": "21987654321", "mensagem_chat_id": null}`
+  - Se o canal for `whatsapp`, NUNCA peça o telefone — já temos.
+
 - **Se o contexto trouxer `municipio_ambiguo`** (localidade existe em 2+ cidades cobertas): pergunte ao cliente qual cidade. Exemplo: "Santa Isabel fica em qual cidade — Magé ou São Gonçalo?" As opções estão no campo `municipios` do fato. Quando o cliente responder, registre o município correto em `fatos_observados` com chave `"municipio"`.
 
 - **Se o contexto trouxer `frete_nao_coberto`** (município sem cobertura, confirmado pelo backend): "Infelizmente não entregamos em [município]. Prefere retirar na loja?" — registre `tipo_entrega = retirada` se o cliente aceitar.
