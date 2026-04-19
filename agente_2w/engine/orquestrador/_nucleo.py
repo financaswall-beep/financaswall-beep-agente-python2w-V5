@@ -1807,7 +1807,7 @@ def processar_turno(
         except Exception:
             logger.exception("Falha no follow-up de frete — usando mensagem original")
 
-    # --- 13. Persistir mensagem de saida ---
+    # --- 13. Montar mensagem de saida (persistencia acontece apos logica de fotos) ---
     # Se um pedido foi criado neste turno, substituir a mensagem da IA
     # pela confirmacao formatada com dados reais do banco.
     # Se houve follow-up de frete, usar a mensagem do follow-up.
@@ -1816,103 +1816,142 @@ def processar_turno(
         if pedido_criado
         else (envelope_pos_frete.mensagem_cliente if envelope_pos_frete else envelope.mensagem_cliente)
     )
-    _persistir_saida(sessao_id, mensagem_final, metadata_json=usage_info or None)
 
-    # --- 14. Retornar mensagem + fotos + videos (apenas se cliente solicitou) ---
+    # --- 14. Fotos + videos (apenas se cliente solicitou) ---
     fotos_para_enviar: list[str] = []
     videos_para_enviar: list[str] = []
+    _pneu_ids_selecionados: list[str] = []
 
     pediu_foto = _cliente_pediu_foto(mensagem_texto, etapa=contexto.sessao.etapa_atual)
     pediu_video = _cliente_pediu_video(mensagem_texto, etapa=contexto.sessao.etapa_atual)
 
-    if (pediu_foto or pediu_video) and not pneus_encontrados:
-        # Fallback: tentar recuperar do contexto se este turno nao fez busca
-        fato_pneus_foto = contexto_repo.buscar_fato_ativo(
-            sessao_id, ChaveContexto.ULTIMOS_PNEUS_ENCONTRADOS
-        )
-        if fato_pneus_foto and fato_pneus_foto.valor_json:
-            pneus_encontrados = fato_pneus_foto.valor_json
-            logger.debug("Recuperou %d pneus do contexto para envio de midia", len(pneus_encontrados))
-
-    if (pediu_foto or pediu_video) and pneus_encontrados:
+    if pediu_foto or pediu_video:
         from agente_2w.db.foto_pneu_repo import (
+            buscar_foto_principal,
             buscar_fotos_principais_batch,
             buscar_video,
             listar_fotos,
         )
         from agente_2w.tools.busca_catalogo import _parsear_medida
 
-        # Se o cliente já selecionou um pneu (item_provisorio ativo), enviar foto
-        # SOMENTE daquele pneu — nunca de outros da busca anterior.
+        # Fonte da verdade quando o cliente ja selecionou pneu(s): banco de fotos direto.
+        # Ignoramos pneus_encontrados porque pode estar stale/fora do limit do contexto.
         _itens_sel = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
-        _pneu_ids_selecionados = {
+        _pneu_ids_selecionados = [
             str(it.pneu_id) for it in _itens_sel
             if it.status_item == StatusItemProvisorio.selecionado_cliente
-        }
-        if _pneu_ids_selecionados:
-            pneus_midia = [
-                p for p in pneus_encontrados
-                if str(p.get("pneu_id")) in _pneu_ids_selecionados
-            ]
-        else:
-            # Sem item selecionado: usar lista completa com filtros existentes
-            pneus_midia = pneus_encontrados
-            if len(pneus_midia) > 3:
-                dim = _parsear_medida(mensagem_texto)
-                if dim:
-                    medida_str = f"{dim['largura']}/{dim['perfil']}-{dim['aro']}"
-                    filtrados = [
-                        p for p in pneus_midia
-                        if p.get("medida") == medida_str
-                        or p.get("medida") == f"{dim['largura']}/{dim['perfil']}-{dim['aro']}"
-                    ]
-                    if filtrados:
-                        pneus_midia = filtrados
-        # Hard cap: max 3 pneus com mídia para não sobrecarregar o cliente
-        if len(pneus_midia) > 3:
-            pneus_midia = pneus_midia[:3]
-
-        # Batch-fetch fotos principais dos pneus cujo dict nao trouxe foto_url
-        # (caso comum: busca por moto, cuja tabela nao tem a coluna).
-        _pids_sem_foto = [
-            p.get("pneu_id") for p in pneus_midia
-            if p.get("pneu_id") and not p.get("foto_url")
         ]
-        _batch_fotos = (
-            buscar_fotos_principais_batch(_pids_sem_foto) if _pids_sem_foto else {}
-        )
 
-        for p in pneus_midia:
-            pneu_id_midia = p.get("pneu_id")
-            if not pneu_id_midia:
-                continue
-            try:
-                pneu_uuid_midia = UUID(str(pneu_id_midia))
-                if pediu_foto:
-                    foto_principal = p.get("foto_url") or _batch_fotos.get(str(pneu_id_midia))
-                    if foto_principal:
-                        fotos_para_enviar.append(foto_principal)
-                    else:
-                        # Ultimo fallback: lista completa do banco (qualquer tipo)
-                        todas = listar_fotos(pneu_uuid_midia)
-                        for f in todas:
-                            url = f.get("url") if isinstance(f, dict) else getattr(f, "url", None)
-                            if url and url not in fotos_para_enviar and not url.endswith(".mp4"):
-                                fotos_para_enviar.append(url)
-                                break  # so a primeira foto valida
-                        if not todas:
-                            logger.warning(
-                                "Pneu %s sem foto cadastrada em foto_pneu", pneu_id_midia,
-                            )
-                if pediu_video:
-                    video_url = buscar_video(pneu_uuid_midia)
-                    if video_url:
-                        videos_para_enviar.append(video_url)
-            except Exception:
-                logger.exception("Erro ao buscar midia do pneu %s", pneu_id_midia)
+        if _pneu_ids_selecionados:
+            # Caminho direto: consulta foto_pneu por cada pneu selecionado.
+            for pid in _pneu_ids_selecionados:
+                try:
+                    pneu_uuid_sel = UUID(pid)
+                except Exception:
+                    logger.warning("pneu_id selecionado invalido: %s", pid)
+                    continue
+                try:
+                    if pediu_foto:
+                        foto = buscar_foto_principal(pneu_uuid_sel)
+                        if not foto:
+                            todas = listar_fotos(pneu_uuid_sel)
+                            for f in todas:
+                                url = f.get("url") if isinstance(f, dict) else getattr(f, "url", None)
+                                if url and not url.endswith(".mp4"):
+                                    foto = url
+                                    break
+                        if foto:
+                            fotos_para_enviar.append(foto)
+                        else:
+                            logger.warning("Pneu selecionado %s sem foto em foto_pneu", pid)
+                    if pediu_video:
+                        video = buscar_video(pneu_uuid_sel)
+                        if video:
+                            videos_para_enviar.append(video)
+                except Exception:
+                    logger.exception("Erro ao buscar midia do pneu selecionado %s", pid)
+        else:
+            # Sem selecao: usar pneus_encontrados (fluxo original com filtros).
+            if not pneus_encontrados:
+                fato_pneus_foto = contexto_repo.buscar_fato_ativo(
+                    sessao_id, ChaveContexto.ULTIMOS_PNEUS_ENCONTRADOS
+                )
+                if fato_pneus_foto and fato_pneus_foto.valor_json:
+                    pneus_encontrados = fato_pneus_foto.valor_json
+                    logger.debug(
+                        "Recuperou %d pneus do contexto para envio de midia",
+                        len(pneus_encontrados),
+                    )
+
+            if pneus_encontrados:
+                pneus_midia = pneus_encontrados
+                if len(pneus_midia) > 3:
+                    dim = _parsear_medida(mensagem_texto)
+                    if dim:
+                        medida_str = f"{dim['largura']}/{dim['perfil']}-{dim['aro']}"
+                        filtrados = [
+                            p for p in pneus_midia
+                            if p.get("medida") == medida_str
+                            or p.get("medida") == f"{dim['largura']}/{dim['perfil']}-{dim['aro']}"
+                        ]
+                        if filtrados:
+                            pneus_midia = filtrados
+                # Hard cap: max 3 pneus com midia para nao sobrecarregar o cliente
+                if len(pneus_midia) > 3:
+                    pneus_midia = pneus_midia[:3]
+
+                # Batch-fetch fotos principais dos pneus cujo dict nao trouxe foto_url
+                # (caso comum: busca por moto, cuja tabela nao tem a coluna).
+                _pids_sem_foto = [
+                    p.get("pneu_id") for p in pneus_midia
+                    if p.get("pneu_id") and not p.get("foto_url")
+                ]
+                _batch_fotos = (
+                    buscar_fotos_principais_batch(_pids_sem_foto) if _pids_sem_foto else {}
+                )
+
+                for p in pneus_midia:
+                    pneu_id_midia = p.get("pneu_id")
+                    if not pneu_id_midia:
+                        continue
+                    try:
+                        pneu_uuid_midia = UUID(str(pneu_id_midia))
+                        if pediu_foto:
+                            foto_principal = p.get("foto_url") or _batch_fotos.get(str(pneu_id_midia))
+                            if foto_principal:
+                                fotos_para_enviar.append(foto_principal)
+                            else:
+                                # Ultimo fallback: lista completa do banco (qualquer tipo)
+                                todas = listar_fotos(pneu_uuid_midia)
+                                for f in todas:
+                                    url = f.get("url") if isinstance(f, dict) else getattr(f, "url", None)
+                                    if url and url not in fotos_para_enviar and not url.endswith(".mp4"):
+                                        fotos_para_enviar.append(url)
+                                        break  # so a primeira foto valida
+                                if not todas:
+                                    logger.warning(
+                                        "Pneu %s sem foto cadastrada em foto_pneu", pneu_id_midia,
+                                    )
+                        if pediu_video:
+                            video_url = buscar_video(pneu_uuid_midia)
+                            if video_url:
+                                videos_para_enviar.append(video_url)
+                    except Exception:
+                        logger.exception("Erro ao buscar midia do pneu %s", pneu_id_midia)
 
     # Dedup preservando ordem
     fotos_para_enviar = list(dict.fromkeys(fotos_para_enviar))
     videos_para_enviar = list(dict.fromkeys(videos_para_enviar))
+
+    # Fallback textual: cliente pediu foto de item selecionado mas banco nao tem.
+    # Evita o cliente ficar achando que a foto vai chegar depois.
+    if pediu_foto and not fotos_para_enviar and _pneu_ids_selecionados:
+        mensagem_final = (
+            mensagem_final.rstrip()
+            + "\n\n(Ah, a foto desse ficou indisponível aqui agora — se quiser eu chamo a equipe pra te mandar por outro canal, tá?)"
+        )
+
+    # Persistir saida (apos eventual append do fallback de foto)
+    _persistir_saida(sessao_id, mensagem_final, metadata_json=usage_info or None)
 
     return RespostaTurno(texto=mensagem_final, fotos=fotos_para_enviar, videos=videos_para_enviar)
