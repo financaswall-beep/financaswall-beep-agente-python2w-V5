@@ -105,16 +105,30 @@ def _resolver_timeout(sessao) -> UUID:
 
         if situacao == SituacaoSessao.expirada_pos_pedido:
             # Sessao com pedido criado expirou apos 24h — fechar e criar nova
-            # Liberar estoque reservado do pedido antes de fechar
-            try:
-                from agente_2w.engine.promotor import expirar_pedido_sessao
-                expirou = expirar_pedido_sessao(sessao.id)
-                if expirou:
-                    logger.info(
-                        "Pedido da sessao %s expirado e estoque liberado",
-                        sessao.id,
-                    )
-            except Exception:
+            # Liberar estoque reservado do pedido antes de fechar (3 tentativas
+            # com backoff para cortar reserva orfa — #2.2)
+            from agente_2w.engine.promotor import expirar_pedido_sessao
+            import time as _time
+            _expirou_ok = False
+            for _att in range(3):
+                try:
+                    expirou = expirar_pedido_sessao(sessao.id)
+                    if expirou:
+                        logger.info(
+                            "Pedido da sessao %s expirado e estoque liberado (tentativa %d)",
+                            sessao.id, _att + 1,
+                        )
+                    _expirou_ok = True
+                    break
+                except Exception:
+                    if _att == 2:
+                        logger.critical(
+                            "RESERVA_ORFA: falha final ao expirar pedido sessao=%s apos 3 tentativas",
+                            sessao.id,
+                        )
+                    else:
+                        _time.sleep(2 ** _att)
+            if not _expirou_ok:
                 logger.exception(
                     "Falha ao expirar pedido da sessao %s — estoque pode ficar reservado",
                     sessao.id,
@@ -1543,10 +1557,14 @@ def processar_turno(
     # de novo. Fechar sessao atual e criar nova para a nova compra.
     _ACOES_BUSCA = {"buscar_por_moto", "buscar_por_medida"}
     _acoes_set = set(envelope.acoes_sugeridas)
+    # A4: so reprocessar se a IA estiver confiante (evita nova sessao especulativa)
+    _conf_envelope = getattr(envelope, "confianca", None)
+    _conf_val = getattr(_conf_envelope, "value", _conf_envelope)
     if (
         contexto.sessao.etapa_atual == EtapaFluxo.fechamento
         and _acoes_set & _ACOES_BUSCA
         and not pedido_criado
+        and _conf_val != "baixa"
     ):
         from agente_2w.db import pedido_repo as _ped_repo
         pedido_existente = _ped_repo.buscar_pedido_por_sessao(sessao_id)
@@ -1799,7 +1817,11 @@ def processar_turno(
             logger.debug("Recuperou %d pneus do contexto para envio de midia", len(pneus_encontrados))
 
     if (pediu_foto or pediu_video) and pneus_encontrados:
-        from agente_2w.db.foto_pneu_repo import buscar_foto_frontal, buscar_video, listar_fotos
+        from agente_2w.db.foto_pneu_repo import (
+            buscar_fotos_principais_batch,
+            buscar_video,
+            listar_fotos,
+        )
         from agente_2w.tools.busca_catalogo import _parsear_medida
 
         # Se o cliente já selecionou um pneu (item_provisorio ativo), enviar foto
@@ -1832,6 +1854,16 @@ def processar_turno(
         if len(pneus_midia) > 3:
             pneus_midia = pneus_midia[:3]
 
+        # Batch-fetch fotos principais dos pneus cujo dict nao trouxe foto_url
+        # (caso comum: busca por moto, cuja tabela nao tem a coluna).
+        _pids_sem_foto = [
+            p.get("pneu_id") for p in pneus_midia
+            if p.get("pneu_id") and not p.get("foto_url")
+        ]
+        _batch_fotos = (
+            buscar_fotos_principais_batch(_pids_sem_foto) if _pids_sem_foto else {}
+        )
+
         for p in pneus_midia:
             pneu_id_midia = p.get("pneu_id")
             if not pneu_id_midia:
@@ -1839,19 +1871,21 @@ def processar_turno(
             try:
                 pneu_uuid_midia = UUID(str(pneu_id_midia))
                 if pediu_foto:
-                    # Envia principal + frontal (se existirem)
-                    if p.get("foto_url"):
-                        fotos_para_enviar.append(p["foto_url"])
-                    frontal = buscar_foto_frontal(pneu_uuid_midia)
-                    if frontal and frontal != p.get("foto_url"):
-                        fotos_para_enviar.append(frontal)
-                    # Fallback: se nenhuma foto via campos, buscar do banco
-                    if not p.get("foto_url") and not frontal:
+                    foto_principal = p.get("foto_url") or _batch_fotos.get(str(pneu_id_midia))
+                    if foto_principal:
+                        fotos_para_enviar.append(foto_principal)
+                    else:
+                        # Ultimo fallback: lista completa do banco (qualquer tipo)
                         todas = listar_fotos(pneu_uuid_midia)
                         for f in todas:
                             url = f.get("url") if isinstance(f, dict) else getattr(f, "url", None)
                             if url and url not in fotos_para_enviar and not url.endswith(".mp4"):
                                 fotos_para_enviar.append(url)
+                                break  # so a primeira foto valida
+                        if not todas:
+                            logger.warning(
+                                "Pneu %s sem foto cadastrada em foto_pneu", pneu_id_midia,
+                            )
                 if pediu_video:
                     video_url = buscar_video(pneu_uuid_midia)
                     if video_url:

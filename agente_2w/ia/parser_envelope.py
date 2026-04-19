@@ -20,20 +20,33 @@ class ParseError(Exception):
 def _extrair_json(texto: str) -> str:
     """Extrai o primeiro bloco JSON do texto, mesmo com markdown ao redor.
 
-    Usa bracket counting (balanceamento de chaves) como metodo principal —
-    garante extracao correta de JSON aninhado. Regex non-greedy era usado
-    antes mas truncava objetos com sub-objetos (ex: {"a": {"b": 1}}).
+    Usa bracket counting (balanceamento de chaves) com rastreio de strings —
+    `{` ou `}` dentro de string nao contam. Sem isso, JSON truncado no meio
+    de uma string (ex: ...: "olha o } no texto ) era considerado fechado.
     """
-    # Metodo principal: encontrar o primeiro { ... } balanceado
     inicio = texto.find("{")
     if inicio == -1:
         return texto
 
     nivel = 0
+    em_string = False
+    escape = False
     for i in range(inicio, len(texto)):
-        if texto[i] == "{":
+        c = texto[i]
+        if escape:
+            escape = False
+            continue
+        if c == "\\" and em_string:
+            escape = True
+            continue
+        if c == '"':
+            em_string = not em_string
+            continue
+        if em_string:
+            continue
+        if c == "{":
             nivel += 1
-        elif texto[i] == "}":
+        elif c == "}":
             nivel -= 1
             if nivel == 0:
                 return texto[inicio : i + 1]

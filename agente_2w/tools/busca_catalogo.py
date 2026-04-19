@@ -110,6 +110,15 @@ def _filtrar_top2_marcas(resultados: list[dict]) -> tuple[list[dict], list[str]]
         return resultados, todas
     top2 = sorted(todas, key=lambda m: (-estoque_por_marca[m], preco_medio.get(m, 9999), m))[:2]
     filtrados = [p for p in resultados if (p.get("pneu_marca") or p.get("marca") or "") in top2]
+    # Fallback: se filtro zerou (ex: pneu_marca vazia em todos), devolve
+    # resultados originais para nao esconder pneus do cliente.
+    if not filtrados:
+        logger.warning(
+            "_filtrar_top2_marcas: filtro ficou vazio com %d resultados (marcas: %s) — "
+            "devolvendo lista original",
+            len(resultados), todas,
+        )
+        return resultados, todas
     return filtrados, todas
 
 
@@ -299,8 +308,12 @@ def buscar_pneus_por_moto(
     termos = _normalizar_termo_moto(termo_moto)
     sem_estoque_info = None  # guardado para anexar ao resultado do fallback
 
-    for termo in termos:
+    for _idx_termo, termo in enumerate(termos):
         compatibilidades = catalogo_repo.buscar_compatibilidade_por_moto_texto(termo)
+        logger.info(
+            "[busca_moto] tentativa=%d termo_original=%r variante=%r hits=%d",
+            _idx_termo + 1, termo_moto, termo, len(compatibilidades),
+        )
         if compatibilidades:
             if posicao:
                 filtradas = [

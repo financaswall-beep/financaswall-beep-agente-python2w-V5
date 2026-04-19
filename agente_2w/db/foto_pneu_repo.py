@@ -82,3 +82,33 @@ def listar_fotos(pneu_id: UUID) -> list[dict]:
     except Exception:
         logger.exception("Erro ao listar fotos pneu %s", pneu_id)
         return []
+
+
+def buscar_fotos_principais_batch(pneu_ids: list) -> dict[str, str]:
+    """Batch: retorna {pneu_id: url} da foto principal para vários pneus.
+
+    Usado para enriquecer resultados de busca por moto (tabela
+    compatibilidade_moto_pneu não tem foto_url). Faz 1 query só.
+    """
+    if not pneu_ids:
+        return {}
+    ids_str = [str(p) for p in pneu_ids]
+    try:
+        res = (
+            supabase.table(_TABELA)
+            .select("pneu_id, url, ordem")
+            .in_("pneu_id", ids_str)
+            .eq("tipo", "principal")
+            .eq("ativo", True)
+            .order("ordem")
+            .execute()
+        )
+        mapa: dict[str, str] = {}
+        for row in res.data or []:
+            pid = str(row.get("pneu_id"))
+            if pid and pid not in mapa and row.get("url"):
+                mapa[pid] = row["url"]
+        return mapa
+    except Exception:
+        logger.exception("Erro ao listar fotos principais em batch (%d ids)", len(ids_str))
+        return {}

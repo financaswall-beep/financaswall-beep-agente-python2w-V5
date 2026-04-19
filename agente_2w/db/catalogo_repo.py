@@ -170,9 +170,16 @@ def buscar_compatibilidade_por_moto_texto(termo: str) -> list[dict]:
         else:
             estoque_map[pid] = False
 
+    # Enriquecer com foto_url (tabela compatibilidade_moto_pneu nao tem foto_url —
+    # sem isso, envio de foto pelo agente falha silenciosamente em busca por moto).
+    from agente_2w.db import foto_pneu_repo
+    foto_map = foto_pneu_repo.buscar_fotos_principais_batch(pneu_ids)
+
     for r in resultados:
         pid = r.get("pneu_id")
         r["em_estoque"] = estoque_map.get(pid, False)
+        if not r.get("foto_url"):
+            r["foto_url"] = foto_map.get(str(pid)) if pid else None
 
     return resultados
 

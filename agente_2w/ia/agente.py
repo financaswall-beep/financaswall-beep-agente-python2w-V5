@@ -326,6 +326,7 @@ def _chamar_agente_responses(
     }
 
     t0 = time.monotonic()
+    tool_call_history: list[str] = []  # rastreio de tools chamadas para detectar loop
 
     for round_num in range(MAX_TOOL_ROUNDS):
         response = _chamar_openai_responses(
@@ -336,12 +337,36 @@ def _chamar_agente_responses(
             envelope_schema=envelope_schema,
         )
 
+        # A3: resposta incompleta (max_output_tokens, content_filter, etc.) —
+        # output_text vira parcial/"" e parser falha silenciosamente. Forcar erro.
+        status = getattr(response, "status", None)
+        if status and status not in ("completed", "in_progress"):
+            details = getattr(response, "incomplete_details", None)
+            logger.error(
+                "[RESPONSES] status=%s incomplete_details=%s — resposta truncada, descartando",
+                status, details,
+            )
+            raise RuntimeError(f"responses_status_{status}")
+
         output_items = response.output
         function_calls = _extrair_function_calls(output_items)
 
         if not function_calls:
             latencia = int((time.monotonic() - t0) * 1000)
             return response.output_text or "", pneus_encontrados, _extrair_usage(response, modelo, latencia)
+
+        # #7.1: detectar loop — mesma tool+args chamada 3x seguidas indica
+        # que o modelo entrou em ciclo. Descartar tools no proximo round.
+        for fc in function_calls:
+            _n = getattr(fc, "name", None) or (fc.get("name") if isinstance(fc, dict) else None)
+            _a = getattr(fc, "arguments", None) or (fc.get("arguments") if isinstance(fc, dict) else None)
+            tool_call_history.append(f"{_n}:{_a}")
+        if len(tool_call_history) >= 3 and len(set(tool_call_history[-3:])) == 1:
+            logger.warning(
+                "[RESPONSES] Loop detectado (tool=%s) — chamando sem tools",
+                tool_call_history[-1].split(":")[0],
+            )
+            break
 
         # Doc: "include the original function_call item followed by
         # its function_call_output item (same call_id)"

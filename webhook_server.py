@@ -17,7 +17,7 @@ from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from threading import Lock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import tempfile
 
@@ -116,13 +116,22 @@ def _lock_para_telefone(telefone: str) -> Lock:
 # ---------------------------------------------------------------------------
 
 _turno_async_locks: dict[str, asyncio.Lock] = {}
+_locks_guard = asyncio.Lock()
 
 
-def _get_turno_lock(telefone: str) -> asyncio.Lock:
-    """Retorna (ou cria) um asyncio.Lock por telefone. Thread-safe via GIL do dict."""
-    if telefone not in _turno_async_locks:
-        _turno_async_locks[telefone] = asyncio.Lock()
-    return _turno_async_locks[telefone]
+async def _get_turno_lock(telefone: str) -> asyncio.Lock:
+    """Retorna (ou cria) asyncio.Lock por telefone de forma atomica.
+
+    Criacao de Lock nao e thread-safe em async (checagem + insercao em steps
+    distintos poderiam rodar entre yields de coroutinas), entao usamos um
+    guard global para a criacao.
+    """
+    if telefone in _turno_async_locks:
+        return _turno_async_locks[telefone]
+    async with _locks_guard:
+        if telefone not in _turno_async_locks:
+            _turno_async_locks[telefone] = asyncio.Lock()
+        return _turno_async_locks[telefone]
 
 
 # ---------------------------------------------------------------------------
@@ -742,7 +751,7 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     raw_id = data.get("id")
     message_id = (
         str(raw_id) if raw_id
-        else f"cw_{conversation_id}_{datetime.now(timezone.utc).timestamp()}"
+        else f"cw_{conversation_id}_{uuid4().hex}"
     )
 
     # 7. Filtrar por inbox (opcional — aceita multiplos)
@@ -854,7 +863,8 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
         nonlocal content
         # Lock por telefone: garante que dois webhooks do mesmo contato
         # nao processam em paralelo (evita race condition de contexto).
-        async with _get_turno_lock(telefone):
+        _turno_lock = await _get_turno_lock(telefone)
+        async with _turno_lock:
             try:
                 # 12a. Transcrever audios (se houver)
                 for audio_url in audios:
