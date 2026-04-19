@@ -475,7 +475,10 @@ def _salvar_itens_orfaos_pre_finalizacao(sessao_id: UUID) -> int:
     # cliente escolheu 1, safety net nao deve criar os outros 2).
     posicoes_ja_cobertas: set[str] = set()
     for item in itens_ativos:
-        if item.posicao and item.pneu_id and str(item.pneu_id) in pneu_ids_ja_salvos:
+        if item.posicao and item.status_item in (
+            StatusItemProvisorio.selecionado_cliente,
+            StatusItemProvisorio.validado,
+        ):
             posicoes_ja_cobertas.add(item.posicao.lower().strip())
 
     criados = 0
@@ -1370,6 +1373,11 @@ def processar_turno(
                     vistos.add(pid)
                     try:
                         pneu_uuid = UUID(str(pid))
+                        # Guarda anti-duplicata (mesma logica de enriquecimento_itens.py:152)
+                        _itens_check_9b = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
+                        if any(i.pneu_id and str(i.pneu_id) == str(pneu_uuid) for i in _itens_check_9b):
+                            logger.info("Rede 9b: item pneu_id=%s ja existe — skip", pneu_uuid)
+                            continue
                         posicao_pneu = p.get("posicao")
                         preco = float(p["preco_venda"]) if p.get("preco_venda") else None
                         item_provisorio_repo.criar_item(ItemProvisorioCreate(
@@ -1422,21 +1430,26 @@ def processar_turno(
                         _p9c = _unicos_9c[0]
                         try:
                             _pneu_uuid_9c = UUID(str(_p9c["pneu_id"]))
-                            _preco_9c = float(_p9c["preco_venda"]) if _p9c.get("preco_venda") else None
-                            _posicao_9c = _p9c.get("posicao")
-                            item_provisorio_repo.criar_item(ItemProvisorioCreate(
-                                sessao_chat_id=sessao_id,
-                                status_item=StatusItemProvisorio.selecionado_cliente,
-                                pneu_id=_pneu_uuid_9c,
-                                posicao=_posicao_9c,
-                                quantidade=1,
-                                preco_unitario_sugerido=_preco_9c,
-                            ))
-                            logger.info(
-                                "Rede de seguranca 9c: item criado automaticamente pneu_id=%s "
-                                "(entrega/frete registrado neste turno sem item)",
-                                _pneu_uuid_9c,
-                            )
+                            # Guarda anti-duplicata (mesma logica de enriquecimento_itens.py:152)
+                            _itens_check_9c = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
+                            if any(i.pneu_id and str(i.pneu_id) == str(_pneu_uuid_9c) for i in _itens_check_9c):
+                                logger.info("Rede 9c: item pneu_id=%s ja existe — skip", _pneu_uuid_9c)
+                            else:
+                                _preco_9c = float(_p9c["preco_venda"]) if _p9c.get("preco_venda") else None
+                                _posicao_9c = _p9c.get("posicao")
+                                item_provisorio_repo.criar_item(ItemProvisorioCreate(
+                                    sessao_chat_id=sessao_id,
+                                    status_item=StatusItemProvisorio.selecionado_cliente,
+                                    pneu_id=_pneu_uuid_9c,
+                                    posicao=_posicao_9c,
+                                    quantidade=1,
+                                    preco_unitario_sugerido=_preco_9c,
+                                ))
+                                logger.info(
+                                    "Rede de seguranca 9c: item criado automaticamente pneu_id=%s "
+                                    "(entrega/frete registrado neste turno sem item)",
+                                    _pneu_uuid_9c,
+                                )
                         except Exception:
                             logger.exception("Rede de seguranca 9c falhou")
 
@@ -1473,22 +1486,27 @@ def processar_turno(
                             _p9d = _unicos_9d[0]
                             try:
                                 _pneu_uuid_9d = UUID(str(_p9d["pneu_id"]))
-                                _preco_9d = float(_p9d["preco_venda"]) if _p9d.get("preco_venda") else None
-                                _posicao_9d = _p9d.get("posicao")
-                                item_provisorio_repo.criar_item(ItemProvisorioCreate(
-                                    sessao_chat_id=sessao_id,
-                                    status_item=StatusItemProvisorio.selecionado_cliente,
-                                    pneu_id=_pneu_uuid_9d,
-                                    posicao=_posicao_9d,
-                                    quantidade=1,
-                                    preco_unitario_sugerido=_preco_9d,
-                                ))
-                                logger.info(
-                                    "Rede de seguranca 9d: item criado automaticamente pneu_id=%s "
-                                    "(IA disse '%s' mas nao incluiu mudancas_itens:criar)",
-                                    _pneu_uuid_9d,
-                                    next((k for k in _keywords_9d if k in _msg_9d), "?"),
-                                )
+                                # Guarda anti-duplicata (mesma logica de enriquecimento_itens.py:152)
+                                _itens_check_9d = item_provisorio_repo.listar_itens_ativos_por_sessao(sessao_id)
+                                if any(i.pneu_id and str(i.pneu_id) == str(_pneu_uuid_9d) for i in _itens_check_9d):
+                                    logger.info("Rede 9d: item pneu_id=%s ja existe — skip", _pneu_uuid_9d)
+                                else:
+                                    _preco_9d = float(_p9d["preco_venda"]) if _p9d.get("preco_venda") else None
+                                    _posicao_9d = _p9d.get("posicao")
+                                    item_provisorio_repo.criar_item(ItemProvisorioCreate(
+                                        sessao_chat_id=sessao_id,
+                                        status_item=StatusItemProvisorio.selecionado_cliente,
+                                        pneu_id=_pneu_uuid_9d,
+                                        posicao=_posicao_9d,
+                                        quantidade=1,
+                                        preco_unitario_sugerido=_preco_9d,
+                                    ))
+                                    logger.info(
+                                        "Rede de seguranca 9d: item criado automaticamente pneu_id=%s "
+                                        "(IA disse '%s' mas nao incluiu mudancas_itens:criar)",
+                                        _pneu_uuid_9d,
+                                        next((k for k in _keywords_9d if k in _msg_9d), "?"),
+                                    )
                             except Exception:
                                 logger.exception("Rede de seguranca 9d falhou")
 

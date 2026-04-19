@@ -84,7 +84,8 @@ def listar_fatos_ativos(sessao_id: UUID) -> list[ContextoConversa]:
             .select("*")
             .eq("sessao_chat_id", str(sessao_id))
             .eq("ativo", True)
-            .order("coletado_em", desc=False)
+            .order("coletado_em", desc=True)
+            .limit(30)
             .execute()
         )
         return [ContextoConversa(**row) for row in resultado.data]
