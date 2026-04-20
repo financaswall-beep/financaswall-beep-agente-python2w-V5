@@ -68,6 +68,38 @@ def buscar(termo: str) -> list[dict]:
         return []
 
 
+def registrar_mencao(termo: str) -> None:
+    """Incrementa acessos para métrica de BI (cliente mencionou esse bairro).
+
+    Use quando o bairro foi mencionado pelo cliente mas o fluxo de frete
+    resolveu via município direto (Camada 1), sem passar por buscar().
+    Fire-and-forget — não quebra o fluxo principal.
+    """
+    if not termo:
+        return
+    chave = _normalizar(termo)
+    try:
+        res = (
+            supabase.table(_TABELA)
+            .select("id, acessos")
+            .eq("termo_normalizado", chave)
+            .execute()
+        )
+        if not res.data:
+            return
+        agora = datetime.now(timezone.utc).isoformat()
+        for row in res.data:
+            try:
+                supabase.table(_TABELA).update(
+                    {"acessos": (row.get("acessos") or 0) + 1,
+                     "atualizado_em": agora}
+                ).eq("id", row["id"]).execute()
+            except Exception:
+                pass
+    except Exception:
+        logger.exception("Erro ao registrar mencao para termo '%s'", termo)
+
+
 def salvar(
     termo_original: str,
     bairro: str | None,

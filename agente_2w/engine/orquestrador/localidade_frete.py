@@ -224,6 +224,13 @@ def _consultar_e_registrar_frete(sessao_id: UUID) -> None:
             valor_frete = area_entrega_repo.consultar_frete(municipio)
             if valor_frete is not None:
                 municipio_resolvido = municipio
+                # BI: cliente mencionou bairro, mas Camada 1 resolveu direto pelo
+                # municipio (pulou Camada 2). Registra mencao para o contador.
+                if bairro:
+                    try:
+                        bairro_municipio_cache_repo.registrar_mencao(bairro)
+                    except Exception:
+                        pass
 
         # ── CAMADA 2: Cache bairro→município ──
         if valor_frete is None:
