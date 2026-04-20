@@ -68,11 +68,18 @@ def buscar(termo: str) -> list[dict]:
         return []
 
 
-def registrar_mencao(termo: str) -> None:
-    """Incrementa acessos para métrica de BI (cliente mencionou esse bairro).
+def registrar_mencao(
+    termo: str,
+    bairro: str | None = None,
+    municipio: str | None = None,
+    fonte: str = "mencao_direta",
+    sessao_id: UUID | None = None,
+) -> None:
+    """Incrementa acessos para métrica de BI (cliente mencionou essa localidade).
 
-    Use quando o bairro foi mencionado pelo cliente mas o fluxo de frete
-    resolveu via município direto (Camada 1), sem passar por buscar().
+    Use quando o fluxo de frete resolveu sem passar por buscar() — ex.: Camada 1
+    resolveu direto pelo município. Se não existir entrada para o termo, cria
+    uma (acessos=1) para garantir contagem desde a primeira menção.
     Fire-and-forget — não quebra o fluxo principal.
     """
     if not termo:
@@ -85,17 +92,38 @@ def registrar_mencao(termo: str) -> None:
             .eq("termo_normalizado", chave)
             .execute()
         )
-        if not res.data:
-            return
         agora = datetime.now(timezone.utc).isoformat()
-        for row in res.data:
-            try:
-                supabase.table(_TABELA).update(
-                    {"acessos": (row.get("acessos") or 0) + 1,
-                     "atualizado_em": agora}
-                ).eq("id", row["id"]).execute()
-            except Exception:
-                pass
+
+        if res.data:
+            # Incrementa acessos nas linhas existentes
+            for row in res.data:
+                try:
+                    supabase.table(_TABELA).update(
+                        {"acessos": (row.get("acessos") or 0) + 1,
+                         "atualizado_em": agora}
+                    ).eq("id", row["id"]).execute()
+                except Exception:
+                    pass
+            return
+
+        # Sem entrada — cria uma nova para BI (apenas se temos municipio conhecido)
+        if municipio is None:
+            return
+        insert_payload = {
+            "termo_normalizado": chave,
+            "termo_original": termo,
+            "bairro": bairro,
+            "municipio": municipio,
+            "fonte": fonte,
+            "acessos": 1,
+            "atualizado_em": agora,
+        }
+        if sessao_id:
+            insert_payload["sessao_id"] = str(sessao_id)
+        try:
+            supabase.table(_TABELA).insert(insert_payload).execute()
+        except Exception:
+            pass
     except Exception:
         logger.exception("Erro ao registrar mencao para termo '%s'", termo)
 
